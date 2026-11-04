@@ -146,7 +146,7 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlshot` | Screenshot at 45 s (after shaders finish) |
 | `-hlpitch=<deg> -hlyaw=<deg> [-hlpan=<deg/s>]` | Lock (or slowly pan) the view so captures repeat |
 | `-hlautoshoot [-hlshootat=<s>]` | Fire four aimed test shots at fish and log hits |
-| `-hlautoshoot -hlaimimage` | The same, but aim straight at the nearest fish's image the way a player would (tests "aim where it looks") |
+| `-hlautoshoot -hlaimimage` | The same, but aim straight at the image of the nearest still fish within 4.5 m, the way a player would (tests "aim where it looks") |
 | `-hlnoimage` | Draw fish where they really are, not where refraction shows them |
 | `-hlstraightarrow` | Arrows keep their line through the surface (real physics: aim under the image) |
 | `-hljournal=<file>` | Use another journal file (a test can start from an empty one) |

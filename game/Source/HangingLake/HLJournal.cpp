@@ -78,7 +78,11 @@ bool FHLJournal::Load()
 	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid()
 		|| !Root->TryGetArrayField(TEXT("fish"), Fish) || !Fish)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("HL journal: %s is not a journal; starting a new one"), *Path);
+		// Keep the unreadable file (a crash mid-write, a hand edit) rather than let
+		// the next save overwrite it with an empty journal.
+		const FString Bad = Path + TEXT(".bad");
+		IFileManager::Get().Move(*Bad, *Path, true);
+		UE_LOG(LogTemp, Warning, TEXT("HL journal: %s could not be read; kept as %s, starting a new one"), *Path, *Bad);
 		return false;
 	}
 
@@ -153,8 +157,10 @@ bool FHLJournal::Save() const
 		return false;
 	}
 
+	// Write beside it, then swap in, so a crash mid-save cannot cut the journal short.
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), true);
-	return FFileHelper::SaveStringToFile(Out, *Path);
+	const FString Tmp = Path + TEXT(".tmp");
+	return FFileHelper::SaveStringToFile(Out, *Tmp) && IFileManager::Get().Move(*Path, *Tmp, true);
 }
 
 bool FHLJournal::Record(

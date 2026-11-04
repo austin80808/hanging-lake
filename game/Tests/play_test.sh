@@ -9,9 +9,11 @@
 #   image     -hlautoshoot -hlaimimage    aim straight at the fish's image, as a player would
 #   straight  ... -hlstraightarrow        same, with an arrow that does not bend
 #
-# Expect: solver lands some; image lands most short shots (the arrow bends like the
-# light, so the image is where to aim); straight lands fewer than image (aiming at
-# the image goes high). Every hit should leave a "landed" line in that run's journal.
+# Expect: solver lands most shots; image lands most of its shots (it only takes still
+# fish within 4.5 m, where gravity drops the arrow less than a trout is tall, and the
+# arrow bends like the light, so the image is where to aim); straight lands fewer
+# than image (aiming at the image goes high). "skipped" lines mean no still fish was
+# close enough. Every hit should leave a "landed" line in that run's journal.
 #
 # Usage: game/Tests/play_test.sh [seconds per run, default 60]
 set -euo pipefail
@@ -41,15 +43,16 @@ play image    -hlautoshoot -hlaimimage
 play straight -hlautoshoot -hlaimimage -hlstraightarrow
 
 echo
-printf '%-9s %5s %6s %8s %7s\n' run hits misses journal errors
+printf '%-9s %5s %6s %8s %8s %7s\n' run hits misses skipped journal errors
 for name in solver image straight; do
   log="$out/$name.log"
   [ -f "$log" ] || { echo "$name: no log (did the game start?)"; continue; }
   hits=$(grep -c 'HLSHOOT HIT' "$log" || true)
   misses=$(grep -c 'HLSHOOT MISS' "$log" || true)
+  skipped=$(grep -c 'HLSHOOT skipped' "$log" || true)
   journal=$(grep -c 'HLJOURNAL' "$log" || true)
   errors=$(grep -cE 'Error:|Ensure condition failed|Assertion failed' "$log" || true)
-  printf '%-9s %5s %6s %8s %7s\n' "$name" "$hits" "$misses" "$journal" "$errors"
+  printf '%-9s %5s %6s %8s %8s %7s\n' "$name" "$hits" "$misses" "$skipped" "$journal" "$errors"
 done
 echo
 grep -h 'HLSHOOT aiming\|HLSHOOT target\|HLJOURNAL' "$out"/*.log | sed 's/^.*LogTemp: Warning: //' | head -40

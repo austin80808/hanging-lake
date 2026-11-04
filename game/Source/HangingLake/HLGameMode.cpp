@@ -188,8 +188,14 @@ void AHLGameMode::StartPlay()
 	// --- journal ----------------------------------------------------------
 	// Saved/HangingLake/Journal.json, or -hljournal=<file> (a test can start clean).
 	FString JournalPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HangingLake"), TEXT("Journal.json"));
-	FParse::Value(FCommandLine::Get(), TEXT("hljournal="), JournalPath);
-	Journal.SetPath(FPaths::ConvertRelativePathToFull(JournalPath));
+	JournalPath = FPaths::ConvertRelativePathToFull(JournalPath);
+	FString JournalArg;
+	if (FParse::Value(FCommandLine::Get(), TEXT("hljournal="), JournalArg))
+	{
+		// Relative to where the game was launched from, not the engine's binaries.
+		JournalPath = FPaths::ConvertRelativePathToFull(FPaths::LaunchDir(), JournalArg);
+	}
+	Journal.SetPath(JournalPath);
 	Journal.Load();
 	if (Bow)
 	{
@@ -742,31 +748,42 @@ namespace
 	float SimulateMiss(const UHLTerrainData* Terrain, const FVector& Eye, const FVector& Dir,
 		float WaterZ, const FVector& Target, bool bBendsLikeLight, float& OutTime)
 	{
+		// Step for step what AHLBow::StepArrow does at full draw: 1/120 s steps,
+		// split at the surface so the bend happens exactly where the arrow enters.
 		FVector Pos = Eye + Dir * 60.0f; // the bow starts the arrow 60 cm out
 		FVector Vel = Dir * 4200.0f;
-		bool bUnder = false;
+		bool bUnder = Pos.Z < WaterZ;
 		float Best = TNumericLimits<float>::Max();
 		OutTime = 0.0f;
 		const float Dt = 1.0f / 120.0f;
 		for (float T = 0.0f; T < 4.0f; T += Dt)
 		{
-			Vel.Z -= 980.0f * Dt;
-			if (Pos.Z < WaterZ && !bUnder)
+			auto Consider = [&](const FVector& A, const FVector& B)
 			{
+				const float D = FMath::PointDistToSegment(Target, A, B);
+				if (D < Best) { Best = D; OutTime = T; }
+			};
+			Vel.Z -= 980.0f * Dt;
+			if (bUnder)
+			{
+				Vel *= FMath::Pow(0.12f, Dt);
+			}
+			FVector Next = Pos + Vel * Dt;
+			if (!bUnder && Next.Z < WaterZ)
+			{
+				const float U = FMath::Clamp((Pos.Z - WaterZ) / (Pos.Z - Next.Z), 0.0f, 1.0f);
+				const FVector Cross = Pos + (Next - Pos) * U;
+				Consider(Pos, Cross);
+				Pos = Cross;
 				bUnder = true;
 				bool bTIR = false;
 				Vel = bBendsLikeLight
 					? FHLSnellSolver::Refract(Vel.GetSafeNormal(), FVector::UpVector, 1.0f,
 						FHLSnellSolver::WaterIOR, bTIR) * Vel.Size() * 0.9f
 					: Vel * 0.9f;
+				Next = Pos + Vel * (Dt * (1.0f - U));
 			}
-			if (bUnder)
-			{
-				Vel *= FMath::Pow(0.12f, Dt);
-			}
-			const FVector Next = Pos + Vel * Dt;
-			const float D = FMath::PointDistToSegment(Target, Pos, Next);
-			if (D < Best) { Best = D; OutTime = T; }
+			Consider(Pos, Next);
 			Pos = Next;
 			if (Pos.Z < Terrain->ElevationAt(Pos.X, Pos.Y)) { break; } // blocked by rock or bed
 		}
@@ -836,16 +853,29 @@ void AHLGameMode::AutoShoot()
 		if (FParse::Param(FCommandLine::Get(), TEXT("hlaimimage")))
 		{
 			// Test the README's promise instead of the solver: point the reticle at the
-			// nearest fish's image, as a player would, and let go. With the arrow
-			// bending like light this lands at short range (gravity drops it ~7 cm at
-			// 5 m); with -hlstraightarrow it should sail over.
+			// nearest fish's image, as a player would, and let go. Only still fish
+			// (holding or resting) within 4.5 m qualify: past that, gravity alone
+			// drops a full-draw arrow more than a trout is tall, and a cruising fish
+			// moves out of the way during the flight. With the arrow bending like
+			// light these shots land; with -hlstraightarrow they go high.
 			BestFish = nullptr;
-			float BestDist = 900.0f;
+			float BestDist = 450.0f;
 			for (const auto& Pair : Before)
 			{
 				AHLFish* F = Pair.Key.Get();
-				const float D = F ? FVector::Dist(F->GetImageLocation(), Eye) : BestDist;
-				if (F && !F->bLanded && D < BestDist) { BestDist = D; BestFish = F; }
+				if (!F || F->bLanded
+					|| (F->GetState() != EHLFishState::Hold && F->GetState() != EHLFishState::Rest))
+				{
+					continue;
+				}
+				const float D = FVector::Dist(F->GetImageLocation(), Eye);
+				if (D < BestDist) { BestDist = D; BestFish = F; }
+			}
+			if (!BestFish)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("HLSHOOT skipped: no still fish within 4.5 m to aim at"));
+				GM->Bow->CancelDraw();
+				return;
 			}
 			if (BestFish)
 			{
@@ -1114,40 +1144,50 @@ void AHLGameMode::UpdateJournal(float DeltaSeconds)
 		{
 			continue;
 		}
+		const int32 Id = F->FishId;
+		const bool bCalm = F->GetState() != EHLFishState::Startle;
+		if (!bCalm)
+		{
+			CloseSeconds.Remove(Id); // spooked: the stalk starts over
+		}
+
+		// Both stages need an unbroken stretch: look away, lose sight of it or let
+		// it spook, and the count starts again.
 		const FVector Img = F->GetImageLocation();
 		const FVector To = Img - Eye;
 		const float Dist = To.Size();
-		if (Dist > 3500.0f || Dist < 1.0f || FVector::DotProduct(To / Dist, Forward) < ViewCos)
+		bool bInView = Dist <= 3500.0f && Dist >= 1.0f && FVector::DotProduct(To / Dist, Forward) >= ViewCos;
+		if (bInView)
 		{
-			continue;
+			FHitResult Hit;
+			bInView = !World->LineTraceSingleByChannel(Hit, Eye, Img, ECC_Visibility, Params) || Hit.GetActor() == F;
 		}
-		FHitResult Hit;
-		if (World->LineTraceSingleByChannel(Hit, Eye, Img, ECC_Visibility, Params) && Hit.GetActor() != F)
+		if (!bInView)
 		{
+			SeenSeconds.Remove(Id);
+			CloseSeconds.Remove(Id);
 			continue;
 		}
 
-		float& Seen = SeenSeconds.FindOrAdd(F->FishId);
+		float& Seen = SeenSeconds.FindOrAdd(Id);
 		Seen += DeltaSeconds;
-		if (Seen >= 1.5f && Journal.GetStage(F->FishId) < EHLJournalStage::Observed)
+		if (Seen >= 1.5f && Journal.GetStage(Id) < EHLJournalStage::Observed)
 		{
 			RecordJournal(F, EHLJournalStage::Observed, Dist);
 		}
 
 		// Stalked: watched from within bow range while it carried on undisturbed.
 		const float Flat = FVector::Dist2D(Feet, F->GetActorLocation());
-		if (Seen >= 1.5f && Flat < StalkRangeCm && F->GetState() != EHLFishState::Startle)
+		if (!bCalm || Flat >= StalkRangeCm)
 		{
-			float& Close = CloseSeconds.FindOrAdd(F->FishId);
-			Close += DeltaSeconds;
-			if (Close >= 2.0f && Journal.GetStage(F->FishId) < EHLJournalStage::Stalked)
-			{
-				RecordJournal(F, EHLJournalStage::Stalked, Flat);
-			}
+			CloseSeconds.Remove(Id);
+			continue;
 		}
-		else if (F->GetState() == EHLFishState::Startle)
+		float& Close = CloseSeconds.FindOrAdd(Id);
+		Close += DeltaSeconds;
+		if (Close >= 2.0f && Journal.GetStage(Id) < EHLJournalStage::Stalked)
 		{
-			CloseSeconds.Remove(F->FishId); // spooked: start the stalk again
+			RecordJournal(F, EHLJournalStage::Stalked, Flat);
 		}
 	}
 }
@@ -1159,7 +1199,7 @@ void AHLGameMode::RecordJournal(AHLFish* F, EHLJournalStage Stage, float Distanc
 		return;
 	}
 	FHLJournalMoment Moment;
-	Moment.When = FDateTime::Now();
+	Moment.When = FDateTime::UtcNow(); // stored as ISO 8601 with a Z, so it must be UTC
 	Moment.SunElevationDeg = SunElevationDeg;
 	Moment.DepthCm = F->GetDepthCm();
 	Moment.DistanceCm = DistanceCm;

@@ -92,6 +92,16 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Hanging Lake|Fish")
 	class UStaticMeshComponent* Image = nullptr;
 
+	/** What arrows hit: a box the size of the real fish. (The stretched sphere's
+	 *  own collision is sized by its smallest axis, a ball a third of the fish.)
+	 *  Answers only the arrow's channel, so the hidden fish never blocks the
+	 *  player, the camera or sight lines. */
+	UPROPERTY(VisibleAnywhere, Category = "Hanging Lake|Fish")
+	class UBoxComponent* HitBox = nullptr;
+
+	/** Where refraction puts the fish this frame, before the idle bob. */
+	FVector ImageLocation = FVector::ZeroVector;
+
 	EHLFishState State = EHLFishState::Hold;
 	FVector HomePoint = FVector::ZeroVector;
 	FVector TargetPoint = FVector::ZeroVector;

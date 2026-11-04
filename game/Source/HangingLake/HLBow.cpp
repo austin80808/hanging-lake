@@ -134,6 +134,9 @@ void AHLBow::ReleaseDraw()
 	ArrowLinger = 0.0f;
 	// Start the visible arrow a little ahead of the eye so it is not inside the camera.
 	ArrowPos += ArrowVel.GetSafeNormal() * 60.0f;
+	// Shooting from in the water (wading deep): nothing to cross, nothing bends.
+	bArrowUnderwater = ArrowPos.Z < Water->GetWaterZ();
+	FlightAccumulator = 0.0f;
 	PlaceArrowMesh();
 	if (ArrowMesh) { ArrowMesh->SetVisibility(true); }
 	// Record the flight as it happens (see StepArrow) for the teaching overlay.
@@ -162,14 +165,16 @@ void AHLBow::Tick(float DeltaSeconds)
 		return;
 	}
 
-	// Fly in fixed 1/120 s steps whatever the frame rate, so the arrow lands where
-	// it should on a slow machine too (at ~6 fps the single-step path drifted).
-	float Remaining = DeltaSeconds;
-	while (Remaining > KINDA_SMALL_NUMBER && bArrowInFlight)
+	// Fly in exact 1/120 s steps whatever the frame rate, carrying the leftover
+	// time to the next frame, so the arrow lands where it should on a slow machine
+	// (at ~6 fps the single-step path drifted) and matches SimulateMiss exactly.
+	constexpr float Step = 1.0f / 120.0f;
+	FlightAccumulator += DeltaSeconds;
+	int32 Steps = 0;
+	while (FlightAccumulator >= Step && bArrowInFlight)
 	{
-		const float Dt = FMath::Min(Remaining, 1.0f / 120.0f);
-		Remaining -= Dt;
-		if (StepArrow(Dt)) { break; }
+		FlightAccumulator -= Step;
+		if (StepArrow(Step) || ++Steps >= 240) { break; } // 2 s of flight per frame at most
 	}
 }
 
@@ -181,65 +186,32 @@ bool AHLBow::StepArrow(float Dt)
 	// Gravity, then water drag. Below the surface the arrow loses energy fast, which
 	// is why deep shots are harder and why the retrieval distance stays short.
 	ArrowVel.Z -= 980.0f * Dt;
-
-	if (ArrowPos.Z < WaterZ && !bArrowUnderwater)
-	{
-		// Crossed the surface: bend like light, or carry straight on like a real
-		// arrow. Either way the water takes a tenth of the speed at once.
-		bArrowUnderwater = true;
-		if (bArrowBendsLikeLight)
-		{
-			bool bTIR = false;
-			ArrowVel = FHLSnellSolver::Refract(
-				ArrowVel.GetSafeNormal(), FVector::UpVector, 1.0f, FHLSnellSolver::WaterIOR, bTIR)
-				* ArrowVel.Size() * 0.9f;
-		}
-		else
-		{
-			ArrowVel *= 0.9f;
-		}
-		// Where it went in, on the plane: the kink the overlay points at.
-		LastShotPath.Add(FVector(ArrowPos.X, ArrowPos.Y, WaterZ));
-		LastShotEntryIndex = LastShotPath.Num() - 1;
-		StepsSinceSample = 0;
-
-		// A splash: disturb nearby fish.
-		for (TActorIterator<AHLFish> It(GetWorld()); It; ++It)
-		{
-			if (!It->bLanded && FVector::Dist(It->GetActorLocation(), ArrowPos) < 600.0f)
-			{
-				It->Spook();
-			}
-		}
-	}
-
 	if (bArrowUnderwater)
 	{
 		ArrowVel *= FMath::Pow(0.12f, Dt); // strong drag
 	}
 
-	const FVector NextPos = ArrowPos + ArrowVel * Dt;
+	FVector NextPos = ArrowPos + ArrowVel * Dt;
 
-	// Hit test against fish along this segment.
-	FHitResult Hit;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(HLAArrow), false, OwnerChar);
-	const bool bHitSomething = GetWorld()->SweepSingleByChannel(
-		Hit, ArrowPos, NextPos, FQuat::Identity, ECC_WorldDynamic,
-		FCollisionShape::MakeSphere(4.0f), Params);
-
-	if (bHitSomething)
+	if (!bArrowUnderwater && NextPos.Z < WaterZ)
 	{
-		AHLFish* Fish = Cast<AHLFish>(Hit.GetActor());
-		UE_LOG(LogTemp, Display, TEXT("HL arrow hit %s at %s (underwater=%d)"),
-			Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"),
-			*Hit.ImpactPoint.ToCompactString(), bArrowUnderwater ? 1 : 0);
-		// Leave the arrow (and the overlay's line) where it struck, not a step short.
-		ArrowPos = Hit.Location;
-		EndShot(Fish != nullptr, Fish);
-		return true;
+		// The surface is somewhere in this step. Fly to it on the old heading, enter
+		// the water exactly there, and spend the rest of the step on the new heading.
+		// (Bending at the next step instead, once already under, put the kink up to
+		// 35 cm late: enough to miss a fish aimed at dead centre.)
+		const float T = FMath::Clamp((ArrowPos.Z - WaterZ) / (ArrowPos.Z - NextPos.Z), 0.0f, 1.0f);
+		if (SweepTo(ArrowPos + (NextPos - ArrowPos) * T))
+		{
+			return true;
+		}
+		EnterWater();
+		NextPos = ArrowPos + ArrowVel * (Dt * (1.0f - T));
 	}
 
-	ArrowPos = NextPos;
+	if (SweepTo(NextPos))
+	{
+		return true;
+	}
 	PlaceArrowMesh();
 	if (++StepsSinceSample >= 4) // every 1/30 s is plenty for a smooth line
 	{
@@ -260,6 +232,64 @@ bool AHLBow::StepArrow(float Dt)
 		EndShot(false, nullptr);
 	}
 	return !bArrowInFlight;
+}
+
+bool AHLBow::SweepTo(const FVector& To)
+{
+	if (FVector::DistSquared(ArrowPos, To) < 1e-4)
+	{
+		return false; // nothing to sweep (a zero-length sweep is an overlap test)
+	}
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(HLAArrow), false, OwnerChar);
+	if (!GetWorld()->SweepSingleByChannel(
+			Hit, ArrowPos, To, FQuat::Identity, ECC_WorldDynamic,
+			FCollisionShape::MakeSphere(4.0f), Params))
+	{
+		ArrowPos = To;
+		return false;
+	}
+
+	AHLFish* Fish = Cast<AHLFish>(Hit.GetActor());
+	UE_LOG(LogTemp, Display, TEXT("HL arrow hit %s at %s (underwater=%d)"),
+		Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"),
+		*Hit.ImpactPoint.ToCompactString(), bArrowUnderwater ? 1 : 0);
+	// Leave the arrow (and the overlay's line) where it struck, not a step short.
+	ArrowPos = Hit.Location;
+	EndShot(Fish != nullptr, Fish);
+	return true;
+}
+
+void AHLBow::EnterWater()
+{
+	// Bend like light, or carry straight on like a real arrow. Either way the
+	// water takes a tenth of the speed at once.
+	bArrowUnderwater = true;
+	if (bArrowBendsLikeLight)
+	{
+		bool bTIR = false;
+		ArrowVel = FHLSnellSolver::Refract(
+			ArrowVel.GetSafeNormal(), FVector::UpVector, 1.0f, FHLSnellSolver::WaterIOR, bTIR)
+			* ArrowVel.Size() * 0.9f;
+	}
+	else
+	{
+		ArrowVel *= 0.9f;
+	}
+
+	// The kink the overlay points at.
+	LastShotPath.Add(ArrowPos);
+	LastShotEntryIndex = LastShotPath.Num() - 1;
+	StepsSinceSample = 0;
+
+	// A splash: disturb nearby fish.
+	for (TActorIterator<AHLFish> It(GetWorld()); It; ++It)
+	{
+		if (!It->bLanded && FVector::Dist(It->GetActorLocation(), ArrowPos) < 600.0f)
+		{
+			It->Spook();
+		}
+	}
 }
 
 void AHLBow::EndShot(bool bHit, AHLFish* HitFish)

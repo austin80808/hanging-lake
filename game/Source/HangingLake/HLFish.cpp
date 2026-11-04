@@ -1,6 +1,7 @@
 #include "HLFish.h"
 
 #include "Camera/PlayerCameraManager.h"
+#include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Pawn.h"
 #include "HLSnellSolver.h"
@@ -17,10 +18,16 @@ AHLFish::AHLFish()
 
 	Body = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Body"));
 	SetRootComponent(Body);
-	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	Body->SetCollisionObjectType(ECC_WorldDynamic);
-	Body->SetCollisionResponseToAllChannels(ECR_Block);
-	Body->SetGenerateOverlapEvents(true);
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	HitBox = CreateDefaultSubobject<UBoxComponent>(TEXT("HitBox"));
+	HitBox->SetupAttachment(Body);
+	HitBox->SetUsingAbsoluteScale(true); // sized in cm in Init, not by the body's stretch
+	HitBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	HitBox->SetCollisionObjectType(ECC_WorldDynamic);
+	HitBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+	HitBox->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block); // the arrow's sweep
+	HitBox->SetHiddenInGame(true);
 
 	Image = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Image"));
 	Image->SetupAttachment(Body);
@@ -70,6 +77,11 @@ void AHLFish::Init(UHLTerrainData* InTerrain, const FVector& InHomePoint, float 
 		Image->SetWorldScale3D(Scale);
 		Image->SetHiddenInGame(!bDrawImage);
 	}
+	if (HitBox)
+	{
+		// The body's half-sizes: L/2 long, 0.156 L wide and deep.
+		HitBox->SetBoxExtent(FVector(BodyLengthCm * 0.5f, BodyLengthCm * 0.16f, BodyLengthCm * 0.16f));
+	}
 	SetActorRotation(FRotator(0.0f, Heading, 0.0f));
 
 	PickNextTarget();
@@ -101,7 +113,7 @@ float AHLFish::GetDepthCm() const
 
 FVector AHLFish::GetImageLocation() const
 {
-	return Image ? Image->GetComponentLocation() : GetActorLocation();
+	return ImageLocation;
 }
 
 void AHLFish::Spook()
@@ -301,9 +313,9 @@ void AHLFish::UpdateImage()
 			}
 		}
 	}
+	ImageLocation = Where;
 	// A slight idle bob on what the player sees, so a holding fish is not frozen.
-	Where.Z += FMath::Sin(SwimPhase) * 1.2f;
-	Image->SetWorldLocationAndRotation(Where, GetActorRotation());
+	Image->SetWorldLocationAndRotation(Where + FVector(0.0f, 0.0f, FMath::Sin(SwimPhase) * 1.2f), GetActorRotation());
 }
 
 void AHLFish::Tick(float DeltaSeconds)

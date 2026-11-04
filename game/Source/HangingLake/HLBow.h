@@ -26,6 +26,9 @@ public:
 	void StartDraw();
 	void ReleaseDraw();
 
+	/** Let the string down without shooting. */
+	void CancelDraw() { bDrawing = false; DrawAlpha = 0.0f; }
+
 	UFUNCTION(BlueprintPure, Category = "Hanging Lake|Bow")
 	float GetDrawAlpha() const { return DrawAlpha; }
 
@@ -92,6 +95,9 @@ protected:
 	FVector ArrowVel = FVector::ZeroVector;
 	bool bArrowUnderwater = false;
 	float ArrowTimer = 0.0f;
+	/** Unspent frame time: the flight runs in exact 1/120 s steps, so it matches
+	 *  the AutoShoot simulation step for step. */
+	float FlightAccumulator = 0.0f;
 
 	TArray<FVector> LastShotPath;
 	int32 LastShotEntryIndex = INDEX_NONE;
@@ -103,4 +109,10 @@ protected:
 
 	/** One fixed step of flight; true when the shot has ended. */
 	bool StepArrow(float Dt);
+
+	/** Sweep the arrow from where it is to To. On a hit, ends the shot and returns true. */
+	bool SweepTo(const FVector& To);
+
+	/** The arrow is at the surface now: bend (or not), slow, splash, mark the kink. */
+	void EnterWater();
 };
