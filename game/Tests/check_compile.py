@@ -94,7 +94,12 @@ def main() -> int:
     if not BUILD.exists():
         print(f"no previous build at {BUILD}; build the project once in Unreal first")
         return 2
-    files = [Path(a).resolve() for a in sys.argv[1:]] or sorted(SRC.glob("*.cpp"))
+    # Arguments may be paths or bare names from the module (HLFish.cpp).
+    files = [Path(a).resolve() if Path(a).exists() else SRC / a for a in sys.argv[1:]] or sorted(SRC.glob("*.cpp"))
+    missing = [f for f in files if not f.exists()]
+    if missing:
+        print("no such file: " + ", ".join(str(f) for f in missing))
+        return 2
     with tempfile.TemporaryDirectory() as tmp:
         shadow = Path(tmp)
         for name in shadow_generated_headers(shadow):

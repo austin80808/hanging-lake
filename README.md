@@ -150,6 +150,7 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlnoimage` | Draw fish where they really are, not where refraction shows them |
 | `-hlstraightarrow` | Arrows keep their line through the surface (real physics: aim under the image) |
 | `-hljournal=<file>` | Use another journal file (a test can start from an empty one) |
+| `-hlquit=<s>` | Quit after that many seconds (for scripted runs) |
 | `-hlwalklog` | Start on the shelf and walk out along the log, logging height over the water |
 | `-hlrec=<s> -hlrecdur=<s> -hlrecfps=<n>` | Save frames for a GIF |
 | `-hltrace` | Log the camera every 5 s |
@@ -171,6 +172,10 @@ cd pipeline && .venv/bin/python -m pytest tests -q
 patches the line numbers in stale generated headers, so edits to existing classes
 check cleanly. A brand-new `UCLASS`/`USTRUCT` still needs a real build. CI runs the
 solver tests and the pipeline tests on every pull request.
+
+When Unreal is free, `game/Tests/play_test.sh` builds the game and plays three short
+self-shooting sessions (solver aim, aim at the image, aim at the image with a straight
+arrow), then prints hits, misses and journal lines from each log.
 
 ## 📜 Data credits
 

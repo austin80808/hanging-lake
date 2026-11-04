@@ -354,6 +354,19 @@ void AHLGameMode::StartPlay()
 			}
 		}, 45.0f, false);
 	}
+
+	// Test runs: quit by themselves after <s> seconds (-hlquit=<s>), so a script
+	// can play a session and read the log (game/Tests/play_test.sh).
+	float QuitAfter = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("hlquit="), QuitAfter) && QuitAfter > 0.0f)
+	{
+		FTimerHandle QuitTimer;
+		World->GetTimerManager().SetTimer(QuitTimer, []()
+		{
+			UE_LOG(LogTemp, Warning, TEXT("HLQUIT time is up"));
+			FPlatformMisc::RequestExit(false, TEXT("hlquit"));
+		}, QuitAfter, false);
+	}
 }
 
 
