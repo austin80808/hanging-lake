@@ -8,6 +8,8 @@
 #include "HLSnellSolver.h"
 #include "HLTerrainData.h"
 #include "HLWaterSurface.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
 
 AHLBow::AHLBow()
@@ -51,6 +53,10 @@ void AHLBow::PlaceArrowMesh()
 void AHLBow::BeginPlay()
 {
 	Super::BeginPlay();
+	if (FParse::Param(FCommandLine::Get(), TEXT("hlstraightarrow")))
+	{
+		bArrowBendsLikeLight = false;
+	}
 }
 
 void AHLBow::Setup(ACharacter* InOwner, UHLTerrainData* InTerrain, AHLWaterSurface* InWater)
@@ -130,11 +136,11 @@ void AHLBow::ReleaseDraw()
 	ArrowPos += ArrowVel.GetSafeNormal() * 60.0f;
 	PlaceArrowMesh();
 	if (ArrowMesh) { ArrowMesh->SetVisibility(true); }
+	// Record the flight as it happens (see StepArrow) for the teaching overlay.
 	LastShotPath.Reset();
-
-	// Record the bent path for the teaching overlay.
-	FHLSnellSolver::TraceBentPath(
-		ArrowPos, ArrowVel.GetSafeNormal(), Water->GetWaterZ(), 40000.0f, LastShotPath);
+	LastShotPath.Add(ArrowPos);
+	LastShotEntryIndex = INDEX_NONE;
+	StepsSinceSample = 0;
 }
 
 void AHLBow::Tick(float DeltaSeconds)
@@ -178,12 +184,24 @@ bool AHLBow::StepArrow(float Dt)
 
 	if (ArrowPos.Z < WaterZ && !bArrowUnderwater)
 	{
-		// Crossed the surface this frame: refract the velocity, not just the aim.
+		// Crossed the surface: bend like light, or carry straight on like a real
+		// arrow. Either way the water takes a tenth of the speed at once.
 		bArrowUnderwater = true;
-		bool bTIR = false;
-		ArrowVel = FHLSnellSolver::Refract(
-			ArrowVel.GetSafeNormal(), FVector::UpVector, 1.0f, FHLSnellSolver::WaterIOR, bTIR)
-			* ArrowVel.Size() * 0.9f;
+		if (bArrowBendsLikeLight)
+		{
+			bool bTIR = false;
+			ArrowVel = FHLSnellSolver::Refract(
+				ArrowVel.GetSafeNormal(), FVector::UpVector, 1.0f, FHLSnellSolver::WaterIOR, bTIR)
+				* ArrowVel.Size() * 0.9f;
+		}
+		else
+		{
+			ArrowVel *= 0.9f;
+		}
+		// Where it went in, on the plane: the kink the overlay points at.
+		LastShotPath.Add(FVector(ArrowPos.X, ArrowPos.Y, WaterZ));
+		LastShotEntryIndex = LastShotPath.Num() - 1;
+		StepsSinceSample = 0;
 
 		// A splash: disturb nearby fish.
 		for (TActorIterator<AHLFish> It(GetWorld()); It; ++It)
@@ -215,12 +233,19 @@ bool AHLBow::StepArrow(float Dt)
 		UE_LOG(LogTemp, Display, TEXT("HL arrow hit %s at %s (underwater=%d)"),
 			Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"),
 			*Hit.ImpactPoint.ToCompactString(), bArrowUnderwater ? 1 : 0);
+		// Leave the arrow (and the overlay's line) where it struck, not a step short.
+		ArrowPos = Hit.Location;
 		EndShot(Fish != nullptr, Fish);
 		return true;
 	}
 
 	ArrowPos = NextPos;
 	PlaceArrowMesh();
+	if (++StepsSinceSample >= 4) // every 1/30 s is plenty for a smooth line
+	{
+		LastShotPath.Add(ArrowPos);
+		StepsSinceSample = 0;
+	}
 
 	// Stop at the bed.
 	if (Terrain && ArrowPos.Z < Terrain->ElevationAt(ArrowPos.X, ArrowPos.Y))
@@ -239,6 +264,7 @@ bool AHLBow::StepArrow(float Dt)
 
 void AHLBow::EndShot(bool bHit, AHLFish* HitFish)
 {
+	LastShotPath.Add(ArrowPos);
 	bArrowInFlight = false;
 	bArrowUnderwater = false;
 	PlaceArrowMesh();

@@ -36,8 +36,21 @@ public:
 	/** Where the aim ray enters the water, for the HUD's surface marker. */
 	bool GetAimWaterEntry(FVector& OutEntry, FVector& OutAimDir) const;
 
-	/** Exposed for the teaching overlay: the last shot's bent path. */
+	/** The last shot as the arrow actually flew (gravity arc and the bend), for
+	 *  the teaching overlay. */
 	const TArray<FVector>& GetLastShotPath() const { return LastShotPath; }
+
+	/** Index in GetLastShotPath() of the surface crossing, or INDEX_NONE. */
+	int32 GetLastShotEntryIndex() const { return LastShotEntryIndex; }
+
+	/**
+	 * True: the arrow refracts at the surface the way light does, so a shot at the
+	 * fish's image lands on the fish (gravity aside). False (-hlstraightarrow): the
+	 * arrow keeps its line through the surface like a real one, so the player has
+	 * to aim below the image, as a spearfisher does.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hanging Lake|Bow")
+	bool bArrowBendsLikeLight = true;
 
 	/** Fired when an arrow hits a fish. */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnFishHit, class AHLFish*);
@@ -81,6 +94,8 @@ protected:
 	float ArrowTimer = 0.0f;
 
 	TArray<FVector> LastShotPath;
+	int32 LastShotEntryIndex = INDEX_NONE;
+	int32 StepsSinceSample = 0;
 
 	FVector GetEyeLocation() const;
 	FVector GetAimDirection() const;
