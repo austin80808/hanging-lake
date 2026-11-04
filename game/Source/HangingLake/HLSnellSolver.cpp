@@ -1,5 +1,47 @@
 #include "HLSnellSolver.h"
 
+namespace
+{
+	/**
+	 * The one geometric question behind every function here.
+	 *
+	 * Light (or a light-like arrow) travels from a point Above the water to a point
+	 * Below it. Fermat: it crosses the surface where Snell's law holds,
+	 * sin(air angle) = n * sin(water angle). In the vertical plane through both
+	 * points, with S the horizontal distance from Above's foot to the crossing:
+	 *
+	 *   f(S) = S / sqrt(S^2 + H^2) - n * (D - S) / sqrt((D - S)^2 + Depth^2)
+	 *
+	 * f rises monotonically from <= 0 at S = 0 to >= 0 at S = D, so bisection always
+	 * converges on the single root. Returns S, in cm. Doubles throughout: 60 halvings
+	 * of a 100 m span is well under a micron.
+	 */
+	double CrossingDistance(double D, double H, double Depth, double N)
+	{
+		if (D <= 1e-9)
+		{
+			return 0.0;
+		}
+		double Lo = 0.0;
+		double Hi = D;
+		for (int32 I = 0; I < 60; ++I)
+		{
+			const double S = 0.5 * (Lo + Hi);
+			const double F = S / FMath::Sqrt(S * S + H * H)
+				- N * (D - S) / FMath::Sqrt((D - S) * (D - S) + Depth * Depth);
+			if (F < 0.0)
+			{
+				Lo = S;
+			}
+			else
+			{
+				Hi = S;
+			}
+		}
+		return 0.5 * (Lo + Hi);
+	}
+}
+
 bool FHLSnellSolver::RayPlaneEntry(
 	const FVector& RayOrigin, const FVector& RayDir, float WaterZ, FVector& OutEntry)
 {
@@ -8,8 +50,8 @@ bool FHLSnellSolver::RayPlaneEntry(
 		return false;
 	}
 
-	const float T = (WaterZ - RayOrigin.Z) / RayDir.Z;
-	if (T <= 0.0f)
+	const double T = (WaterZ - RayOrigin.Z) / RayDir.Z;
+	if (T <= 0.0)
 	{
 		return false; // plane is behind the eye
 	}
@@ -28,136 +70,85 @@ FVector FHLSnellSolver::Refract(
 	bOutTIR = false;
 
 	const FVector I = IncidentDir.GetSafeNormal();
-	const FVector N = SurfaceNormal.GetSafeNormal();
-	const float Eta = EtaIn / EtaOut;
+	FVector N = SurfaceNormal.GetSafeNormal();
+	// The vector form below needs the normal on the incident side. Callers pass "up"
+	// for both directions (air to water and water to air), so turn it to face I.
+	if (FVector::DotProduct(I, N) > 0.0)
+	{
+		N = -N;
+	}
+	const double Eta = static_cast<double>(EtaIn) / static_cast<double>(EtaOut);
 
-	const float CosI = FMath::Clamp(FVector::DotProduct(-I, N), -1.0f, 1.0f);
-	const float K = 1.0f - Eta * Eta * (1.0f - CosI * CosI);
+	const double CosI = FMath::Clamp(FVector::DotProduct(-I, N), 0.0, 1.0);
+	const double K = 1.0 - Eta * Eta * (1.0 - CosI * CosI);
 
-	if (K < 0.0f)
+	if (K < 0.0)
 	{
 		bOutTIR = true;
 		// Mirror about the surface; the caller decides whether to use it.
-		return I - 2.0f * FVector::DotProduct(I, N) * N;
+		return I - 2.0 * FVector::DotProduct(I, N) * N;
 	}
 
 	return (Eta * I + (Eta * CosI - FMath::Sqrt(K)) * N).GetSafeNormal();
 }
 
+bool FHLSnellSolver::FindSurfaceCrossing(
+	const FVector& AbovePos, const FVector& BelowPos, float WaterZ, FVector& OutCrossing)
+{
+	const double H = AbovePos.Z - WaterZ;
+	const double Depth = WaterZ - BelowPos.Z;
+	if (H <= 0.0 || Depth <= 0.0)
+	{
+		OutCrossing = FVector(BelowPos.X, BelowPos.Y, WaterZ);
+		return false;
+	}
+
+	const FVector Flat(BelowPos.X - AbovePos.X, BelowPos.Y - AbovePos.Y, 0.0);
+	const double D = Flat.Size2D();
+	const double S = CrossingDistance(D, H, Depth, WaterIOR);
+	const FVector Axis = D > 1e-9 ? Flat / D : FVector::ZeroVector;
+	OutCrossing = FVector(AbovePos.X + Axis.X * S, AbovePos.Y + Axis.Y * S, WaterZ);
+	return true;
+}
+
 bool FHLSnellSolver::ApparentPosition(
 	const FVector& EyePos, const FVector& RealPos, float WaterZ, FVector& OutApparent)
 {
-	// Eye must be above the water and the target below it for refraction to matter.
-	if (EyePos.Z <= WaterZ || RealPos.Z >= WaterZ)
+	FVector Crossing;
+	if (!FindSurfaceCrossing(EyePos, RealPos, WaterZ, Crossing))
 	{
-		OutApparent = RealPos;
+		OutApparent = RealPos; // not looking through the surface: nothing bends
 		return false;
 	}
 
-	// Direction from the real point up to the eye, then refract on the way out.
-	const FVector ToEye = (EyePos - RealPos).GetSafeNormal();
-	bool bTIR = false;
-	const FVector AirDir = Refract(ToEye, FVector::UpVector, WaterIOR, 1.0f, bTIR);
+	const double H = EyePos.Z - WaterZ;
+	const double Depth = WaterZ - RealPos.Z;
+	const double D = FVector::Dist2D(EyePos, RealPos);
+	const double S = FVector::Dist2D(EyePos, Crossing);
 
-	if (bTIR)
-	{
-		OutApparent = RealPos;
-		return false;
-	}
+	// The eye sees the fish along the straight line eye -> crossing. Carry that line
+	// on below the surface until it is over the real fish: that is the image, the
+	// classic "apparent depth" (the fish looks raised, never moved sideways). The
+	// line drops H over S, so over the remaining D - S it drops (D - S) * H / S.
+	// Straight down (S -> 0) that ratio tends to Depth / n.
+	const double ApparentDepth = (S > 1e-3)
+		? (D - S) * H / S
+		: Depth / WaterIOR;
 
-	// Intersect that emergent ray with the eye's viewing geometry: walk back from
-	// the surface entry point along the refracted ray to the eye's depth.
-	FVector Entry;
-	if (!RayPlaneEntry(RealPos, ToEye, WaterZ, Entry))
-	{
-		OutApparent = RealPos;
-		return false;
-	}
-
-	// The observer sees the point along the refracted direction, so the apparent
-	// position is where that line passes closest to the eye at the target's depth.
-	const FVector ViewLine = (EyePos - Entry).GetSafeNormal();
-	const float Denom = ViewLine.Z;
-	if (FMath::IsNearlyZero(Denom))
-	{
-		OutApparent = RealPos;
-		return false;
-	}
-
-	const float T = (RealPos.Z - EyePos.Z) / Denom;
-	OutApparent = EyePos + ViewLine * T;
+	OutApparent = FVector(RealPos.X, RealPos.Y, WaterZ - ApparentDepth);
 	return true;
 }
 
 bool FHLSnellSolver::SolveAim(
 	const FVector& EyePos, const FVector& TargetPos, float WaterZ, FVector& OutAimPoint)
 {
-	if (EyePos.Z <= WaterZ || TargetPos.Z >= WaterZ)
+	// The bent path from the eye to the target crosses the surface at one point.
+	// Aim through it and an arrow that refracts like light lands on the target.
+	if (!FindSurfaceCrossing(EyePos, TargetPos, WaterZ, OutAimPoint))
 	{
 		OutAimPoint = TargetPos;
 		return false;
 	}
-
-	// The real path from eye to target: find the surface entry point such that
-	// the refracted path bends exactly toward the target. Fermat's principle, so
-	// we search the entry point along the surface instead of inverting analytically.
-	FVector Entry;
-	if (!RayPlaneEntry(EyePos, (TargetPos - EyePos).GetSafeNormal(), WaterZ, Entry))
-	{
-		OutAimPoint = TargetPos;
-		return false;
-	}
-
-	FVector Best = Entry;
-	float BestErr = TNumericLimits<float>::Max();
-
-	const FVector SurfaceDir = (Entry - EyePos);
-	const float Span = SurfaceDir.Size2D();
-	const FVector SurfaceAxis = FVector(SurfaceDir.X, SurfaceDir.Y, 0.0f).GetSafeNormal();
-
-	// Coarse-to-fine scan for the entry point minimising lateral miss.
-	for (int32 Pass = 0; Pass < 3; ++Pass)
-	{
-		const float Range = (Pass == 0) ? Span * 0.5f : Span * 0.05f;
-		const int32 Steps = (Pass == 0) ? 32 : 16;
-		const FVector Centre = Best;
-
-		for (int32 i = -Steps; i <= Steps; ++i)
-		{
-			const float Offset = Range * static_cast<float>(i) / static_cast<float>(Steps);
-			const FVector Candidate(
-				Centre.X + SurfaceAxis.X * Offset,
-				Centre.Y + SurfaceAxis.Y * Offset,
-				WaterZ);
-
-			const FVector IntoWater = (TargetPos - Candidate);
-			if (IntoWater.Z >= 0.0f)
-			{
-				continue;
-			}
-
-			bool bTIR = false;
-			const FVector Bent = Refract(IntoWater, FVector::UpVector, 1.0f, WaterIOR, bTIR);
-			if (bTIR)
-			{
-				continue;
-			}
-
-			// The bent direction should be parallel to the real geometric line.
-			const FVector Actual = (TargetPos - Candidate).GetSafeNormal();
-			const float Err = (Bent - Actual).Size();
-
-			if (Err < BestErr)
-			{
-				BestErr = Err;
-				Best = Candidate;
-			}
-		}
-	}
-
-	// OutAimPoint is where the arrow must be pointed: the surface entry that
-	// produces a bent path landing on the target.
-	OutAimPoint = Best;
 	return true;
 }
 
@@ -170,9 +161,8 @@ float FHLSnellSolver::AimOffset(
 		return 0.0f;
 	}
 
-	// The player aims at the image, so the miss is the depth difference between
-	// the image and the fish along the view line.
-	return FMath::Abs(RealPos.Z - Apparent.Z);
+	// The image sits straight above the fish, so the error is purely vertical.
+	return static_cast<float>(FMath::Abs(Apparent.Z - RealPos.Z));
 }
 
 bool FHLSnellSolver::TraceBentPath(
@@ -202,7 +192,7 @@ bool FHLSnellSolver::TraceBentPath(
 	bool bTIR = false;
 	const FVector Bent = Refract(AimDir, FVector::UpVector, 1.0f, WaterIOR, bTIR);
 
-	const float Remaining = MaxDistanceCm - FVector::Dist(EyePos, Entry);
+	const double Remaining = MaxDistanceCm - FVector::Dist(EyePos, Entry);
 	OutPath.Add(EyePos);
 	OutPath.Add(Entry);
 	OutPath.Add(Entry + Bent * Remaining);

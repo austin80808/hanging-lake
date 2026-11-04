@@ -32,7 +32,11 @@ public:
 		float WaterZ,
 		FVector& OutEntryPoint);
 
-	/** Refract a direction crossing the water plane, given a surface normal. */
+	/**
+	 * Refract a direction crossing the water plane. Either orientation of the
+	 * normal works (it is turned to face the incident ray), so pass "up" for both
+	 * air to water (EtaIn 1, EtaOut WaterIOR) and water to air (the reverse).
+	 */
 	static FVector Refract(
 		const FVector& IncidentDir,
 		const FVector& SurfaceNormal,
@@ -41,15 +45,23 @@ public:
 		bool& bOutTotalInternalReflection);
 
 	/**
-	 * Where the player must actually aim to hit Target.
+	 * Where the real, bent path between a point above the water and a point below
+	 * it crosses the surface (Fermat's principle, solved exactly by bisection).
+	 * False, with the point straight above BelowPos, when the two are not on
+	 * opposite sides of the water.
+	 */
+	static bool FindSurfaceCrossing(
+		const FVector& AbovePos,
+		const FVector& BelowPos,
+		float WaterZ,
+		FVector& OutCrossing);
+
+	/**
+	 * Where to point to hit Target with something that bends like light.
 	 *
-	 * Returns the submerged aim point: the point on the target's depth plane
-	 * that, when refracted up through the surface, reaches the eye along the
-	 * same line as the target would. In other words, aim here and the arrow
-	 * lands on Target.
-	 *
-	 * Note this is the inverse problem, and it is solved by finding the actual
-	 * bent path from eye to target rather than by applying a fudge factor.
+	 * Returns the surface point the bent eye-to-target path passes through: aim
+	 * from the eye through it and the path refracts onto Target. This is the
+	 * inverse problem, solved from the geometry rather than with a fudge factor.
 	 */
 	static bool SolveAim(
 		const FVector& EyePos,
@@ -58,9 +70,10 @@ public:
 		FVector& OutAimPoint);
 
 	/**
-	 * The apparent (image) position of a submerged point as seen from EyePos.
-	 * This is where the fish *looks* like it is; the gap between this and the
-	 * real position is the difficulty of the game.
+	 * The apparent (image) position of a submerged point as seen from EyePos:
+	 * where the fish *looks* like it is. It lies on the eye's line of sight,
+	 * straight above the real point and shallower than it (by a factor of 1/n
+	 * looking straight down, much more at grazing angles).
 	 */
 	static bool ApparentPosition(
 		const FVector& EyePos,
@@ -69,8 +82,9 @@ public:
 		FVector& OutApparent);
 
 	/**
-	 * How far below the fish's apparent position the real fish sits, in cm.
-	 * Zero when the eye is directly above the fish.
+	 * How far below its apparent position the real fish sits, in cm. Smallest
+	 * looking straight down (a quarter of the depth), growing toward the depth
+	 * itself as the view flattens.
 	 */
 	static float AimOffset(
 		const FVector& EyePos,
