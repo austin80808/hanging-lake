@@ -1,0 +1,21 @@
+[project]
+name = "hanging-lake-ue"
+version = "0.1.0"
+description = "Build the Hanging Lake bowl (Glenwood Canyon, CO) for Unreal Engine 5.8 from public geodata"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "pillow>=10.0",
+    "requests>=2.31",
+    "shapely>=2.0",
+]
+
+[project.scripts]
+hanginglake = "hanging_lake.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Unreal build and cache output (regenerated)
+game/Binaries/
+game/Intermediate/
+game/Saved/
+game/DerivedDataCache/
+game/.vs/
+game/*.xcworkspace
+game/*.xcodeproj
+game/*.sln
+game/.vscode/
+game/Content/Collections/
+game/Content/Developers/
+
+# Python
+pipeline/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+pipeline/data/raw/*.npy
