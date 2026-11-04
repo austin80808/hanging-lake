@@ -151,6 +151,7 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlstraightarrow` | Arrows keep their line through the surface (real physics: aim under the image) |
 | `-hljournal=<file>` | Use another journal file (a test can start from an empty one) |
 | `-hlquit=<s>` | Quit after that many seconds (for scripted runs) |
+| `-hlmaxdepth=<m>` | Rescale the authored lake bed to this maximum depth (default 2.2 m) without re-running the pipeline |
 | `-hlwalklog` | Start on the shelf and walk out along the log, logging height over the water |
 | `-hlrec=<s> -hlrecdur=<s> -hlrecfps=<n>` | Save frames for a GIF |
 | `-hltrace` | Log the camera every 5 s |

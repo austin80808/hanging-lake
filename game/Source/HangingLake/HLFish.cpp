@@ -125,8 +125,10 @@ void AHLFish::StartleNow()
 	// Bolt away from the current position toward the deepest water nearby.
 	if (Terrain)
 	{
+		// Compare water depths (to the bed), not the fish's own depth, or a fish with
+		// no deeper water nearby "bolts" upward.
 		FVector Best = GetActorLocation();
-		float BestDepth = GetDepthCm();
+		float BestDepth = Terrain->DepthAt(Best.X, Best.Y);
 		for (int32 I = 0; I < 12; ++I)
 		{
 			const float Angle = FMath::FRandRange(0.0f, 2.0f * PI);
