@@ -42,8 +42,12 @@ public:
 
 	FVector SpawnLog(UWorld* World);
 	void SpawnBoardwalk(UWorld* World);
+	void SpawnFalls(UWorld* World);
+	void SpawnTrees(UWorld* World);
 	FVector GetSpawnPoint() const;
 	float BoardwalkDeckZ = 0.0f;
+	/** Top of the log, shore end first (for the walk test). */
+	TArray<FVector> LogPath;
 
 	/** Absolute path to the exported data directory. */
 	UPROPERTY(EditAnywhere, Category = "Hanging Lake")

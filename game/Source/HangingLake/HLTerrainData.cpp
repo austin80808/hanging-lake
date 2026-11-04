@@ -314,27 +314,44 @@ void UHLTerrainData::BuildMesh(AActor* Owner)
 			Verts.Add(FVector(X, Y, Z));
 			UVs.Add(FVector2D(static_cast<float>(C) / Width, static_cast<float>(R) / Height));
 
-			// Tint by height relative to the water line: submerged bed is pale
-			// travertine with algae, the shoreline band is bare stone, and the
-			// canyon walls above it go grey.
+			// Colours from photos of the lake. The material reads vertex colour as
+			// linear, so these are darker than they look as sRGB numbers.
+			//  - bed: pale travertine with patches of bright green algae
+			//  - cliffs near the water: cream travertine streaked with rust
+			//  - gentle ground above the water: forest floor, moss, conifer shade
+			//  - steep rock higher up: grey-brown canyon limestone
 			const float AboveWater = Z - WaterZ;
-			FColor Col;
+			const float Slope = 1.0f - Normals.Last().Z; // 0 flat .. 1 vertical
+			// Cheap deterministic noise for patches and streaks.
+			auto Hash = [](int32 A, int32 B) { uint32 H = uint32(A) * 73856093u ^ uint32(B) * 19349663u; H ^= H >> 13; H *= 0x5bd1e995u; return (H & 0xffff) / 65535.0f; };
+			const float Patch = 0.5f + 0.5f * FMath::Sin(X * 0.0021f + FMath::Sin(Y * 0.0017f) * 2.0f) * FMath::Cos(Y * 0.0019f);
+			const float Streak = 0.5f + 0.5f * FMath::Sin(Y * 0.012f + Hash(C / 6, 0) * 6.0f);
+			FLinearColor Lin;
 			if (Depths.IsValidIndex(I) && Depths[I] > 0.0f)
 			{
-				const float T = FMath::Clamp(Depths[I] / 2.2f, 0.0f, 1.0f);
-				Col = FLinearColor::LerpUsingHSV(
-					FLinearColor(Travertine), FLinearColor(BedAlgae), T * 0.55f).ToFColor(false);
+				const FLinearColor Trav(0.55f, 0.53f, 0.42f), Algae(0.16f, 0.30f, 0.10f);
+				Lin = FMath::Lerp(Trav, Algae, FMath::Clamp(Patch * 1.2f - 0.55f, 0.0f, 0.6f));
 			}
-			else if (AboveWater < 400.0f)
+			else if (Slope > 0.55f && AboveWater < 2500.0f)
 			{
-				Col = FLinearColor::LerpUsingHSV(
-					FLinearColor(Travertine), FLinearColor(Rock),
-					FMath::Clamp(AboveWater / 400.0f, 0.0f, 1.0f)).ToFColor(false);
+				const FLinearColor Cream(0.58f, 0.53f, 0.42f), Rust(0.36f, 0.16f, 0.06f), Moss(0.08f, 0.17f, 0.04f);
+				Lin = FMath::Lerp(Cream, Rust, FMath::Clamp(Streak * 1.3f - 0.4f, 0.0f, 0.8f));
+				Lin = FMath::Lerp(Lin, Moss, Hash(R / 4, C / 4) > 0.8f ? 0.6f : 0.0f);
+			}
+			else if (Slope > 0.55f)
+			{
+				Lin = FMath::Lerp(FLinearColor(0.19f, 0.16f, 0.13f), FLinearColor(0.30f, 0.26f, 0.20f), Patch);
+			}
+			else if (AboveWater < 40.0f)
+			{
+				Lin = FLinearColor(0.50f, 0.46f, 0.34f); // wet travertine shelf at the shore
 			}
 			else
 			{
-				Col = Rock;
+				Lin = FMath::Lerp(FLinearColor(0.05f, 0.10f, 0.03f), FLinearColor(0.13f, 0.14f, 0.06f), Patch);
 			}
+			FColor Col((uint8)FMath::Clamp(Lin.R * 255.f, 0.f, 255.f), (uint8)FMath::Clamp(Lin.G * 255.f, 0.f, 255.f),
+				(uint8)FMath::Clamp(Lin.B * 255.f, 0.f, 255.f), 255);
 			Colors.Add(Col);
 		}
 	}

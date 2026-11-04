@@ -28,8 +28,12 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Misc/Paths.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "Components/StaticMeshComponent.h"
 #include "ProceduralMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/BoxComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 
 namespace HLLandmarks
@@ -53,8 +57,9 @@ namespace HLLandmarks
 	static const FVector2D LogShoreEnd(56100.f, 58659.f);
 	static const FVector2D LogLakeEnd(57069.f, 57627.f);
 	static const FVector2D LogCentre(56584.f, 58142.f);
-	// Standing spot: the east-side boardwalk, the classic view west across the log.
-	static const FVector2D Spawn(56127.f, 59928.f);
+	// Standing spot: the south boardwalk, the postcard view north across the log
+	// to the falls.
+	static const FVector2D Spawn(58544.f, 59512.f);
 }
 
 AHLGameMode::AHLGameMode()
@@ -69,6 +74,12 @@ AHLGameMode::AHLGameMode()
 		// -hldata=<dir> overrides.
 		DataDir = FPaths::Combine(FPaths::ProjectDir(), TEXT(".."), TEXT("pipeline"), TEXT("data"));
 		FParse::Value(FCommandLine::Get(), TEXT("hldata="), DataDir);
+		// Opened through a symlink (e.g. an old ~/Documents/Unreal Projects link),
+		// the relative path misses: fall back to the repo's usual home.
+		if (!IFileManager::Get().DirectoryExists(*FPaths::ConvertRelativePathToFull(DataDir)))
+		{
+			DataDir = FPaths::Combine(FPlatformProcess::UserHomeDir(), TEXT("dev/hanging-lake/pipeline/data"));
+		}
 	}
 }
 
@@ -113,6 +124,8 @@ void AHLGameMode::StartPlay()
 	// --- the boardwalk and the log -------------------------------------------
 	SpawnBoardwalk(World);
 	const FVector LogCentre = SpawnLog(World);
+	SpawnFalls(World);
+	SpawnTrees(World);
 
 	// --- player -----------------------------------------------------------
 	const FVector Spawn = GetSpawnPoint();
@@ -124,7 +137,8 @@ void AHLGameMode::StartPlay()
 
 			// Open on Hanging Lake's fallen log with the falls behind it: aim a
 			// little past the log toward the falls, slightly down.
-			const FVector Target = LogCentre + FVector(0.0f, 0.0f, -150.0f);
+			const FVector Target = FMath::Lerp(LogCentre, FVector(HLLandmarks::Falls, LogCentre.Z), 0.45f)
+				+ FVector(0.0f, 0.0f, 150.0f);
 			const FVector Eye = Char->GetActorLocation();
 			const FRotator Look = (Target - Eye).Rotation();
 			// SetControlRotation alone is overwritten when the pawn finishes
@@ -181,6 +195,47 @@ void AHLGameMode::StartPlay()
 	}
 
 	UE_LOG(LogTemp, Display, TEXT("HL: bowl ready with %d fish"), Fish.Num());
+
+	// Test: start on the bank behind the log and walk out along it (-hlwalklog).
+	if (FParse::Param(FCommandLine::Get(), TEXT("hlwalklog")) && LogPath.Num() > 2)
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (APawn* P = PC->GetPawn())
+			{
+				const FVector Dir = (LogPath.Last() - LogPath[0]).GetSafeNormal2D();
+				// Stand on the shelf 1 m behind the log's end, feet on the ground.
+				const FVector Start = LogPath[0] - Dir * 100.0f;
+				P->SetActorLocation(FVector(Start.X, Start.Y, FMath::Max(Terrain->ElevationAt(Start.X, Start.Y), LogPath[0].Z) + 100.0f),
+					false, nullptr, ETeleportType::TeleportPhysics);
+				PC->SetControlRotation(Dir.Rotation());
+				PC->SetIgnoreLookInput(true);
+				TWeakObjectPtr<APawn> WeakP(P);
+				FTimerHandle Walk;
+				World->GetTimerManager().SetTimer(Walk, [WeakP, Dir]()
+				{
+					if (WeakP.IsValid()) { WeakP->AddMovementInput(Dir, 1.0f); }
+				}, 0.02f, true, 20.0f);
+				FTimerHandle Report;
+				TWeakObjectPtr<AHLGameMode> WeakGM(this);
+				World->GetTimerManager().SetTimer(Report, [WeakP, WeakGM]()
+				{
+					if (!WeakP.IsValid() || !WeakGM.IsValid()) { return; }
+					const FVector L = WeakP->GetActorLocation();
+					const float Feet = L.Z - 90.0f;
+					float Best = TNumericLimits<float>::Max(); int32 BestI = 0;
+					for (int32 I = 0; I < WeakGM->LogPath.Num(); ++I)
+					{
+						const float D = FVector::Dist2D(L, WeakGM->LogPath[I]);
+						if (D < Best) { Best = D; BestI = I; }
+					}
+					UE_LOG(LogTemp, Warning, TEXT("HLWALK feet %.0f cm over water, %.0f cm off the log line, along %d/%d, log top %.0f"),
+						Feet - WeakGM->Terrain->GetWaterZ(), Best, BestI, WeakGM->LogPath.Num() - 1,
+						WeakGM->LogPath[BestI].Z - WeakGM->Terrain->GetWaterZ());
+				}, 1.0f, true, 20.0f);
+			}
+		}
+	}
 
 	// Docs: record frames for a GIF (-hlrec=<start s> -hlrecdur=<s> -hlrecfps=<n>),
 	// written as Saved/Screenshots/<Platform>/rec_0000.png and on.
@@ -374,7 +429,7 @@ namespace
 			{
 				const int32 A = Base + I * Sides + K, B = Base + I * Sides + (K + 1) % Sides;
 				const int32 C = A + Sides, D = B + Sides;
-				T.Append({A, C, B, B, C, D});
+				T.Append({A, B, C, B, D, C}); // outward-facing
 			}
 		}
 		// End caps (fans).
@@ -387,10 +442,137 @@ namespace
 			for (int32 K = 0; K < Sides; ++K)
 			{
 				const int32 A = Base + Ring * Sides + K, B = Base + Ring * Sides + (K + 1) % Sides;
-				if (End == 0) { T.Append({Centre, A, B}); } else { T.Append({Centre, B, A}); }
+				if (End == 0) { T.Append({Centre, B, A}); } else { T.Append({Centre, A, B}); }
 			}
 		}
 	}
+}
+
+void AHLGameMode::SpawnFalls(UWorld* World)
+{
+	// Bridal Veil-style curtains: thin white ribbons along the north rim, from the
+	// travertine ledge down into the lake, where East Fork Dead Horse Creek comes in.
+	UMaterialInterface* FallsMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/M_Falls.M_Falls"));
+	const float WaterZ = Terrain->GetWaterZ();
+	AActor* Falls = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
+	UProceduralMeshComponent* Mesh = NewObject<UProceduralMeshComponent>(Falls, TEXT("Falls"));
+	Falls->SetRootComponent(Mesh);
+	Mesh->RegisterComponent();
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Mesh->SetCastShadow(false);
+
+	TArray<FVector> V, N; TArray<int32> T; TArray<FColor> C;
+	int32 Count = 0;
+	for (float Y = 57300.0f; Y <= 59200.0f; Y += 55.0f)
+	{
+		// Walk north (towards smaller X) from the lake centre to the shore.
+		float ShoreX = -1.0f;
+		for (float X = Terrain->GetLakeCentre().X; X > Terrain->GetLakeCentre().X - 3000.0f; X -= 20.0f)
+		{
+			if (Terrain->DepthAt(X, Y) <= 0.0f) { ShoreX = X; break; }
+		}
+		if (ShoreX < 0.0f) { continue; }
+		// The ledge top: the highest ground within 6 m behind the shore.
+		float TopX = ShoreX, TopZ = WaterZ;
+		for (float X = ShoreX; X > ShoreX - 600.0f; X -= 25.0f)
+		{
+			const float Zh = Terrain->ElevationAt(X, Y);
+			if (Zh > TopZ) { TopZ = Zh; TopX = X; }
+		}
+		if (TopZ - WaterZ < 250.0f) { continue; } // no ledge here, no fall
+		const float Jitter = FMath::Abs(FMath::Sin(Y * 0.37f));
+		if (Jitter < 0.15f) { continue; }          // gaps between curtains
+		const float Width = 20.0f + 70.0f * Jitter;
+		// Ribbon: 14 rows from the lip to the water, bulging out over the ledge.
+		const int32 Base = V.Num();
+		for (int32 Rw = 0; Rw <= 14; ++Rw)
+		{
+			const float U = Rw / 14.0f;
+			const float Xr = FMath::Lerp(TopX + 40.0f, ShoreX + 60.0f, U) + 60.0f * FMath::Sin(PI * U);
+			const float Zr = FMath::Lerp(TopZ + 10.0f, WaterZ, U);
+			for (int32 Cl = 0; Cl < 3; ++Cl)
+			{
+				const float Off = (Cl - 1) * Width * 0.5f * (1.0f + 0.4f * U); // spreads as it falls
+				V.Add(FVector(Xr, Y + Off, Zr));
+				N.Add(FVector(1, 0, 0));
+				const uint8 A = Cl == 1 ? (uint8)(255 * (1.0f - 0.5f * U)) : 0;
+				C.Add(FColor(255, 255, 255, A));
+			}
+		}
+		for (int32 Rw = 0; Rw < 14; ++Rw)
+		{
+			for (int32 Cl = 0; Cl < 2; ++Cl)
+			{
+				const int32 A = Base + Rw * 3 + Cl, B = A + 1, Cc = A + 3, D = Cc + 1;
+				T.Append({A, Cc, B, B, Cc, D});
+			}
+		}
+		++Count;
+	}
+	TArray<FVector2D> UV; UV.SetNumZeroed(V.Num());
+	TArray<FProcMeshTangent> Tan;
+	Mesh->CreateMeshSection(0, V, T, N, UV, C, Tan, false);
+	if (FallsMat) { Mesh->SetMaterial(0, FallsMat); }
+	UE_LOG(LogTemp, Display, TEXT("HL falls: %d curtains on the north rim"), Count);
+}
+
+void AHLGameMode::SpawnTrees(UWorld* World)
+{
+	// Conifers on every slope gentle enough to hold them, around the bowl: the
+	// photos show the lake ringed by spruce and fir.
+	UStaticMesh* Cone = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
+	UStaticMesh* Cyl = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (!Cone || !Cyl || !Base) { return; }
+	AActor* Forest = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
+	USceneComponent* Root = NewObject<USceneComponent>(Forest, TEXT("Root"));
+	Forest->SetRootComponent(Root);
+	Root->RegisterComponent();
+	auto MakeISM = [&](UStaticMesh* M, const FLinearColor& Col) {
+		UInstancedStaticMeshComponent* I = NewObject<UInstancedStaticMeshComponent>(Forest);
+		I->SetupAttachment(Root);
+		I->RegisterComponent();
+		I->SetStaticMesh(M);
+		I->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		UMaterialInstanceDynamic* Mat = UMaterialInstanceDynamic::Create(Base, Forest);
+		Mat->SetVectorParameterValue(TEXT("Color"), Col);
+		I->SetMaterial(0, Mat);
+		return I;
+	};
+	UInstancedStaticMeshComponent* Crowns = MakeISM(Cone, FLinearColor(0.02f, 0.07f, 0.03f));
+	UInstancedStaticMeshComponent* Crowns2 = MakeISM(Cone, FLinearColor(0.04f, 0.10f, 0.03f));
+	UInstancedStaticMeshComponent* Trunks = MakeISM(Cyl, FLinearColor(0.10f, 0.07f, 0.05f));
+
+	const float WaterZ = Terrain->GetWaterZ();
+	const FVector Centre = Terrain->GetLakeCentre();
+	FRandomStream Rng(20261104);
+	int32 Planted = 0;
+	for (int32 Try = 0; Try < 6000 && Planted < 900; ++Try)
+	{
+		const float Ang = Rng.FRandRange(0.0f, 2.0f * PI);
+		const float Rad = FMath::Sqrt(Rng.FRand()) * 9000.0f;
+		const float X = Centre.X + FMath::Cos(Ang) * Rad, Y = Centre.Y + FMath::Sin(Ang) * Rad;
+		if (Terrain->DepthAt(X, Y) > 0.0f) { continue; }
+		const float Zg = Terrain->ElevationAt(X, Y);
+		if (Zg - WaterZ < 80.0f) { continue; }                     // not on the shore shelf
+		const float Gx = Terrain->ElevationAt(X + 150.0f, Y) - Terrain->ElevationAt(X - 150.0f, Y);
+		const float Gy = Terrain->ElevationAt(X, Y + 150.0f) - Terrain->ElevationAt(X, Y - 150.0f);
+		if (FMath::Sqrt(Gx * Gx + Gy * Gy) / 300.0f > 1.1f) { continue; } // too steep: bare rock
+		// Nothing grows on the travertine ledge in front of the falls.
+		if (Zg - WaterZ < 700.0f && FVector2D::Distance(FVector2D(X, Y), FVector2D(Centre)) < 3000.0f) { continue; }
+		// Keep the boardwalk view clear: no trees between the walk and the lake.
+		if (FVector2D::Distance(FVector2D(X, Y), HLLandmarks::Spawn) < 700.0f) { continue; }
+		const float H = Rng.FRandRange(900.0f, 2200.0f);
+		const float R = H * Rng.FRandRange(0.14f, 0.2f);
+		const float Crown = H * 0.8f;
+		// Engine Cone and Cylinder are 100 cm tall with the pivot at the centre.
+		(Rng.FRand() < 0.5f ? Crowns : Crowns2)->AddInstance(FTransform(FRotator(0, Rng.FRandRange(0, 360), 0),
+			FVector(X, Y, Zg + H - Crown * 0.5f), FVector(R / 50.0f, R / 50.0f, Crown / 100.0f)));
+		Trunks->AddInstance(FTransform(FRotator::ZeroRotator, FVector(X, Y, Zg + H * 0.25f),
+			FVector(0.25f + R / 900.0f, 0.25f + R / 900.0f, H * 0.5f / 100.0f)));
+		++Planted;
+	}
+	UE_LOG(LogTemp, Display, TEXT("HL forest: %d trees"), Planted);
 }
 
 FVector AHLGameMode::SpawnLog(UWorld* World)
@@ -399,8 +581,23 @@ FVector AHLGameMode::SpawnLog(UWorld* World)
 	// bleached, barkless trunk with its thick end up on the north-east rim and
 	// the thin end dipping under the water to the south-west.
 	const float WaterZ = Terrain->GetWaterZ();
-	const FVector Shore(HLLandmarks::LogShoreEnd, WaterZ + 20.0f);
-	const FVector Tip(HLLandmarks::LogLakeEnd, WaterZ - 18.0f); // top stays near the surface
+	// The shore end must rest on dry land so it can be walked onto, as people do
+	// at the real lake. The authored lake bed does not match the aerial
+	// shoreline exactly, so extend the trunk north-east until it meets the bank.
+	const FVector2D OutDir = (HLLandmarks::LogShoreEnd - HLLandmarks::LogLakeEnd).GetSafeNormal();
+	FVector2D Edge = HLLandmarks::LogShoreEnd, Bank = HLLandmarks::LogShoreEnd;
+	for (float D = 0.0f; D < 2500.0f; D += 20.0f)
+	{
+		const FVector2D Q = HLLandmarks::LogShoreEnd + OutDir * D;
+		// First ground at or above the waterline: the travertine shelf at the foot
+		// of the falls ledge, about 3.5 m past the photo-measured end.
+		if (Terrain->ElevationAt(Q.X, Q.Y) >= WaterZ) { Edge = Q; Bank = Q + OutDir * 50.0f; break; }
+	}
+	const float BankZ = FMath::Clamp(Terrain->ElevationAt(Bank.X, Bank.Y) + 4.0f, WaterZ + 3.0f, WaterZ + 60.0f);
+	const FVector Shore(Bank, BankZ);
+	const FVector Tip(HLLandmarks::LogLakeEnd, WaterZ - 1.0f);
+	// Fraction of the length (from the shore end) where the trunk reaches open water.
+	const float EdgeU = FMath::Clamp(FVector2D::Distance(Bank, Edge) / FVector2D::Distance(Bank, HLLandmarks::LogLakeEnd) + 0.04f, 0.02f, 0.5f);
 	const FVector Along = (Tip - Shore).GetSafeNormal();
 	const FVector Across = FVector::CrossProduct(Along, FVector::UpVector).GetSafeNormal();
 
@@ -423,38 +620,83 @@ FVector AHLGameMode::SpawnLog(UWorld* World)
 	{
 		const float U = static_cast<float>(I) / Rings;
 		FVector P = FMath::Lerp(Shore, Tip, U);
-		P += Across * 22.0f * FMath::Sin(PI * U);   // bow
-		P.Z -= 6.0f * FMath::Sin(PI * U);           // sag
+		P += Across * 8.0f * FMath::Sin(PI * U);    // nearly straight
+		// Floats flat on the water, rising only where it climbs onto the bank.
+		P.Z = U < EdgeU ? FMath::Lerp(BankZ, WaterZ + 3.0f, FMath::SmoothStep(0.0f, 1.0f, U / EdgeU))
+		                : FMath::Lerp(WaterZ + 3.0f, WaterZ - 1.0f, (U - EdgeU) / (1.0f - EdgeU));
 		Spine.Add(P);
-		Radii.Add(FMath::Lerp(28.0f, 15.0f, FMath::Pow(U, 0.8f)));
+		Radii.Add(FMath::Lerp(13.0f, 7.0f, FMath::Pow(U, 0.8f))); // a slim, barkless trunk
 	}
 	AddTube(Spine, Radii, 16, V, T, N);
 	// Broken branch stubs, short and angled the way a fallen conifer keeps them.
-	const struct { float U; float Angle; float Len; float R; } Stubs[] = {
-		{0.30f, 15.0f, 30.0f, 5.0f}, {0.55f, 170.0f, 38.0f, 4.5f}, {0.78f, -20.0f, 25.0f, 3.5f}};
-	for (const auto& S : Stubs)
+	// The photos show a row of short broken branch spikes standing up along its
+	// whole length, every half metre or so.
+	for (int32 I = 3; I < Rings - 1; I += 2)
 	{
-		const int32 I = FMath::RoundToInt(S.U * Rings);
-		const float Rad = FMath::DegreesToRadians(S.Angle);
-		const FVector Out = (Across * FMath::Cos(Rad) + FVector::UpVector * FMath::Sin(Rad) + Along * 0.35f).GetSafeNormal();
-		TArray<FVector> StubSpine = {Spine[I], Spine[I] + Out * (Radii[I] + S.Len)};
-		TArray<float> StubR = {S.R, S.R * 0.6f};
-		AddTube(StubSpine, StubR, 8, V, T, N);
+		const float Side = (I / 2) % 2 == 0 ? 1.0f : -1.0f;
+		const float Tilt = FMath::DegreesToRadians(15.0f + 20.0f * FMath::Abs(FMath::Sin(I * 1.3f)));
+		const FVector Out = (FVector::UpVector * FMath::Cos(Tilt) + Across * Side * FMath::Sin(Tilt)).GetSafeNormal();
+		const float Len = 8.0f + 14.0f * FMath::Abs(FMath::Sin(I * 2.1f));
+		TArray<FVector> StubSpine = {Spine[I], Spine[I] + Out * (Radii[I] + Len)};
+		TArray<float> StubR = {2.2f, 0.8f};
+		AddTube(StubSpine, StubR, 6, V, T, N);
 	}
 	TArray<FVector2D> UV; UV.SetNumZeroed(V.Num());
-	TArray<FColor> Col; Col.Init(FColor::White, V.Num());
+	// Bleached wood, via the bowl's rock material (lit, vertex colour as base colour,
+	// a little self-glow) so it stays bright at a distance like the photos.
+	TArray<FColor> Col; Col.Init(FColor(214, 207, 190), V.Num());
 	TArray<FProcMeshTangent> Tan;
 	Mesh->CreateMeshSection(0, V, T, N, UV, Col, Tan, true);
 	Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Mesh->SetCollisionObjectType(ECC_WorldStatic);
 	Mesh->SetCollisionResponseToAllChannels(ECR_Block);
-	if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr,
-			TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))
+	if (UMaterialInterface* Wood = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Materials/M_BowlRock.M_BowlRock")))
 	{
-		UMaterialInstanceDynamic* Wood = UMaterialInstanceDynamic::Create(Base, Log);
-		Wood->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.66f, 0.62f, 0.54f)); // sun-bleached grey-tan
 		Mesh->SetMaterial(0, Wood);
 	}
+	// Moss and grass tufts growing on the log.
+	{
+		TArray<FVector> MV, MN; TArray<int32> MT;
+		const float Tufts[] = {0.12f, 0.27f, 0.46f, 0.63f, 0.81f};
+		for (const float U : Tufts)
+		{
+			const int32 I = FMath::RoundToInt(U * Rings);
+			TArray<FVector> TuftSpine = {Spine[I] + FVector(0, 0, Radii[I] * 0.6f), Spine[I] + FVector(0, 0, Radii[I] + 14.0f)};
+			TArray<float> TuftR = {11.0f, 3.0f};
+			AddTube(TuftSpine, TuftR, 10, MV, MT, MN);
+		}
+		TArray<FVector2D> MUV; MUV.SetNumZeroed(MV.Num());
+		TArray<FColor> MC; MC.Init(FColor::White, MV.Num());
+		TArray<FProcMeshTangent> MTan;
+		Mesh->CreateMeshSection(1, MV, MT, MN, MUV, MC, MTan, false);
+		if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr,
+				TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))
+		{
+			UMaterialInstanceDynamic* MossMat = UMaterialInstanceDynamic::Create(Base, Log);
+			MossMat->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.12f, 0.30f, 0.04f));
+			Mesh->SetMaterial(1, MossMat);
+		}
+	}
+	// A walkable strip along the top, pawns only (arrows still hit the trunk
+	// itself): a 13 cm round trunk would otherwise roll a player straight off.
+	for (int32 I = 0; I < Rings; I += 2)
+	{
+		const FVector A = Spine[I] + FVector(0, 0, Radii[I]);
+		const FVector B = Spine[I + 2] + FVector(0, 0, Radii[I + 2]);
+		UBoxComponent* Walk = NewObject<UBoxComponent>(Log);
+		Walk->SetupAttachment(Mesh);
+		Walk->RegisterComponent();
+		Walk->SetWorldLocationAndRotation((A + B) * 0.5f - FVector(0, 0, 4.0f), (B - A).Rotation());
+		Walk->SetBoxExtent(FVector(FVector::Dist(A, B) * 0.5f + 6.0f, 20.0f, 4.0f));
+		Walk->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		Walk->SetCollisionObjectType(ECC_WorldStatic);
+		Walk->SetCollisionResponseToAllChannels(ECR_Ignore);
+		Walk->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+		Walk->SetHiddenInGame(true);
+	}
+	LogPath.Reset();
+	for (int32 I = 0; I <= Rings; ++I) { LogPath.Add(Spine[I] + FVector(0, 0, Radii[I])); }
+
 	UE_LOG(LogTemp, Display, TEXT("HL log: %.0f cm from %s to %s"), FVector::Dist(Shore, Tip),
 		*Shore.ToCompactString(), *Tip.ToCompactString());
 	return FVector(HLLandmarks::LogCentre, WaterZ);

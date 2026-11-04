@@ -7,12 +7,16 @@ never quite where it looks.
 
 ![Opening view from the boardwalk, panning across the log](docs/media/opening-pan.gif)
 
-![Drawing, releasing and landing a fish](docs/media/landing-a-fish.gif)
+![The log, the falls and the forest from the south boardwalk](docs/media/the-log.png)
+
+![Drawing, releasing and landing a fish (earlier visuals)](docs/media/landing-a-fish.gif)
 
 ## 🕹️ How to play
 
-You start on the east boardwalk, looking west across the log toward the north rim
-where the falls come in. Fish cruise the lake; the count is top left.
+You start on the south boardwalk, the postcard view: north across the log to the
+falls. Fish cruise the lake; the count is top left. The log can be walked onto from
+the travertine shelf at its north-east end, like the real one; step off the side
+and you are in the water.
 
 1. Aim at a fish. The reticle is the truth: aim where the fish *looks*, and the
    arrow bends at the surface the way light does.
@@ -83,15 +87,15 @@ point elsewhere). The first launch compiles shaders and can take a few minutes.
 | Lake bed (2.2 m max) | **Authored**: 3DEP has no bathymetry here; a smooth basin fitted to the shoreline |
 | Boardwalk and trail | OpenStreetMap, *Hanging Lake Trail* (ways 159737338, 159737337) |
 | Falls inflow | OpenStreetMap, East Fork Dead Horse Creek |
-| The fallen log | Measured off the USGS NAIP aerial photo: 14.2 m, from the north-east rim (39.601460 N, 107.191661 W) south-west to 39.601373 N, 107.191781 W |
+| The fallen log | Measured off the USGS NAIP aerial photo: from the north-east rim (39.601460 N, 107.191661 W) south-west to 39.601373 N, 107.191781 W, extended 3.5 m onto the travertine shelf so it meets the bank. Slim, bleached and floating flat, with the row of branch spikes and moss tufts seen in photos |
+| Falls, colours, forest | Matched by eye to photos: curtains over the north rim's cream and rust travertine, turquoise water over a pale bed, conifers on the slopes |
 
 ![NAIP aerial with the OSM lake outline and boardwalk; the log is the pale diagonal](docs/media/naip-log-survey.png)
 
-![The log from the boardwalk](docs/media/the-log.png)
-
-Not modelled yet: the falling water itself, trees, textured rock and travertine, and
-the log's exact shape in close-up (its position, length and angle are surveyed; the
-taper, bow and branch stubs are authored).
+Still simple: the falls are static ribbons (no motion or mist), trees are cones, rock
+and travertine are vertex colours rather than textures, and there are no aspens,
+grasses or reflections yet. The log's position and angle are surveyed; its shape is
+matched by eye.
 
 ## 📁 Layout
 
@@ -110,6 +114,7 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlshot` | Screenshot at 45 s (after shaders finish) |
 | `-hlpitch=<deg> -hlyaw=<deg> [-hlpan=<deg/s>]` | Lock (or slowly pan) the view so captures repeat |
 | `-hlautoshoot [-hlshootat=<s>]` | Fire four aimed test shots at fish and log hits |
+| `-hlwalklog` | Start on the shelf and walk out along the log, logging height over the water |
 | `-hlrec=<s> -hlrecdur=<s> -hlrecfps=<n>` | Save frames for a GIF |
 | `-hltrace` | Log the camera every 5 s |
 | `-hlnoterrain -hlnowater -hlnofish -hlnomat` | Turn pieces off to isolate a problem |
