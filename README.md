@@ -20,10 +20,11 @@ and you are in the water.
 
 1. Aim at a fish. What you see is its refracted image: straight above the real
    fish and shallower, by a quarter of its depth looking straight down and far
-   more the flatter you look. The arrow bends at the surface the way the light
-   did, so aim where the fish *looks*. (Launch with `-hlstraightarrow` for a real
-   arrow that keeps its line through the water: then you aim under the image, the
-   way spearfishers do.)
+   more the flatter you look. The arrow is a real one: it keeps its line through
+   the water while the light bent, so the fish is deeper than it looks and you aim
+   *under* it, the way spearfishers do. The flatter the angle, the further under.
+   (Launch with `-hlbendarrow` for an easier arrow that bends like the light, so
+   you aim right at what you see.)
 2. Hold to draw (the bar fills), release to shoot. A full draw flies flattest.
    While you draw, a faint ring marks where your line meets the water.
 3. A hit lands the fish and shows its length and depth. Your first catch shows
@@ -148,7 +149,7 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlautoshoot [-hlshootat=<s>]` | Fire four aimed test shots at fish and log hits |
 | `-hlautoshoot -hlaimimage` | The same, but aim straight at the image of the nearest still fish within 4.5 m, the way a player would (tests "aim where it looks") |
 | `-hlnoimage` | Draw fish where they really are, not where refraction shows them |
-| `-hlstraightarrow` | Arrows keep their line through the surface (real physics: aim under the image) |
+| `-hlbendarrow` | Arrows bend at the surface like light, so a shot at the fish's image lands (the default is a real, straight arrow) |
 | `-hljournal=<file>` | Use another journal file (a test can start from an empty one) |
 | `-hlquit=<s>` | Quit after that many seconds (for scripted runs) |
 | `-hlmaxdepth=<m>` | Rescale the authored lake bed to this maximum depth (default 2.2 m) without re-running the pipeline |

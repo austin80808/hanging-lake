@@ -857,7 +857,8 @@ void AHLGameMode::AutoShoot()
 			// (holding or resting) within 4.5 m qualify: past that, gravity alone
 			// drops a full-draw arrow more than a trout is tall, and a cruising fish
 			// moves out of the way during the flight. With the arrow bending like
-			// light these shots land; with -hlstraightarrow they go high.
+			// light (-hlbendarrow) these shots land; with a real, straight arrow (the
+			// default) they go high.
 			BestFish = nullptr;
 			float BestDist = 450.0f;
 			for (const auto& Pair : Before)

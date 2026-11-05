@@ -258,11 +258,11 @@ and rethink before building content on it.
     visible body at the refracted image position (`FHLSnellSolver::ApparentPosition`:
     on the eye's line of sight, straight above the real fish). Collision and shadow
     stay with the real fish.
-  - By default the arrow refracts like light (`AHLBow::bArrowBendsLikeLight`), so
-    "aim where it looks" is true, and difficulty comes from gravity, range, moving
-    fish and spooking. `-hlstraightarrow` switches to real physics, where the arrow
-    keeps its line and the player must aim under the image: the spearfishing curve
-    this section originally described. Which should be the default is open.
+  - **The arrow is a real one by default** (Austin, 2026-11-04: "Straight, real
+    physics"). It keeps its line through the surface, so the player aims under the
+    image: the spearfishing curve this section originally described, growing with
+    flatter angles. `-hlbendarrow` (`AHLBow::bArrowBendsLikeLight`) switches to an
+    arrow that refracts like light, for which "aim where it looks" is true.
   - The first catch marks "it looked here" and "it was here" and draws the arrow's
     recorded flight with the kink at the surface.
 - **Solver bugs fixed.** `ApparentPosition` returned the real position (it traced

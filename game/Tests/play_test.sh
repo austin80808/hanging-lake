@@ -6,13 +6,15 @@
 # run it when no other project needs the editor.
 #
 #   solver    -hlautoshoot                aim solved by simulating the arrow (the old test)
-#   image     -hlautoshoot -hlaimimage    aim straight at the fish's image, as a player would
-#   straight  ... -hlstraightarrow        same, with an arrow that does not bend
+#   image     -hlautoshoot -hlaimimage -hlbendarrow   aim at the fish's image with an arrow
+#                                                     that bends like light
+#   straight  -hlautoshoot -hlaimimage                the same aim with the default, real arrow
 #
-# Expect: solver lands most shots; image lands most of its shots (it only takes still
-# fish within 4.5 m, where gravity drops the arrow less than a trout is tall, and the
-# arrow bends like the light, so the image is where to aim); straight lands fewer
-# than image (aiming at the image goes high). "skipped" lines mean no still fish was
+# Expect: solver (the default arrow, aim solved by simulation) lands most shots; image
+# lands most of its shots (it only takes still fish within 4.5 m, where gravity drops
+# the arrow less than a trout is tall, and a light-bending arrow follows the light
+# back to the fish); straight lands fewer than image (aiming at the image goes high:
+# the real fish is under it). "skipped" lines mean no still fish was
 # close enough. Every hit should leave a "landed" line in that run's journal.
 #
 # Usage: game/Tests/play_test.sh [seconds per run, default 60]
@@ -39,8 +41,8 @@ play() {
 }
 
 play solver   -hlautoshoot
-play image    -hlautoshoot -hlaimimage
-play straight -hlautoshoot -hlaimimage -hlstraightarrow
+play image    -hlautoshoot -hlaimimage -hlbendarrow
+play straight -hlautoshoot -hlaimimage
 
 echo
 printf '%-9s %5s %6s %8s %8s %7s\n' run hits misses skipped journal errors

@@ -47,13 +47,13 @@ public:
 	int32 GetLastShotEntryIndex() const { return LastShotEntryIndex; }
 
 	/**
-	 * True: the arrow refracts at the surface the way light does, so a shot at the
-	 * fish's image lands on the fish (gravity aside). False (-hlstraightarrow): the
-	 * arrow keeps its line through the surface like a real one, so the player has
-	 * to aim below the image, as a spearfisher does.
+	 * False (the default, Austin's call 2026-11-04): real physics. The arrow keeps
+	 * its line through the surface, so the player has to aim below the fish's
+	 * refracted image, as a spearfisher does. True (-hlbendarrow): the arrow
+	 * refracts like light, so a shot at the image lands (gravity aside).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hanging Lake|Bow")
-	bool bArrowBendsLikeLight = true;
+	bool bArrowBendsLikeLight = false;
 
 	/** Fired when an arrow hits a fish. */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnFishHit, class AHLFish*);

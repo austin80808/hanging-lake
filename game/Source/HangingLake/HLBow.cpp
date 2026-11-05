@@ -53,6 +53,12 @@ void AHLBow::PlaceArrowMesh()
 void AHLBow::BeginPlay()
 {
 	Super::BeginPlay();
+	// Real physics by default; -hlbendarrow makes the arrow refract like light.
+	// (-hlstraightarrow, the old way to ask for real physics, still works.)
+	if (FParse::Param(FCommandLine::Get(), TEXT("hlbendarrow")))
+	{
+		bArrowBendsLikeLight = true;
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("hlstraightarrow")))
 	{
 		bArrowBendsLikeLight = false;
