@@ -18,19 +18,30 @@ falls. Fish cruise the lake; the count is top left. The log can be walked onto f
 the travertine shelf at its north-east end, like the real one; step off the side
 and you are in the water.
 
-1. Aim at a fish. The reticle is the truth: aim where the fish *looks*, and the
-   arrow bends at the surface the way light does.
+1. Aim at a fish. What you see is its refracted image: straight above the real
+   fish and shallower, by a quarter of its depth looking straight down and far
+   more the flatter you look. The arrow is a real one: it keeps its line through
+   the water while the light bent, so the fish is deeper than it looks and you aim
+   *under* it, the way spearfishers do. The flatter the angle, the further under.
+   (Launch with `-hlbendarrow` for an easier arrow that bends like the light, so
+   you aim right at what you see.)
 2. Hold to draw (the bar fills), release to shoot. A full draw flies flattest.
-3. A hit lands the fish and shows its length and depth. A splash near a fish spooks
-   it after a moment, so take your time between shots.
-4. Arrows stop at the lake bed, the rock, and the log.
+   While you draw, a faint ring marks where your line meets the water.
+3. A hit lands the fish and shows its length and depth. Your first catch shows
+   where the fish looked to be, where it really was, and the arrow's path.
+4. Trout read movement on the bank. Walk up to one and it bolts for deep water;
+   hold **Shift** to creep and you can get within a few metres. A splash near a
+   fish spooks it too, and every scare makes that fish warier for a while.
+5. Arrows stop at the lake bed, the rock, and the log.
 
 | Action | Keyboard and mouse | Controller |
 |---|---|---|
 | Look | Mouse | Right stick (slower while drawing, for fine aim) |
 | Walk | W A S D | Left stick |
 | Draw, then release to shoot | Hold left mouse button | Hold right trigger |
+| Creep (walk slowly) | Hold Left Shift | Hold left trigger |
 | Jump | Space | Bottom face button (A / ✕) |
+| Journal | J | Top face button (Y / △) |
 | Quit | Esc | Menu / Options button |
 
 ### 🎮 Controllers and remapping
@@ -46,11 +57,28 @@ button, trigger or stick can be bound to anything:
 +AxisMappings=(AxisName="LookUpRate",Scale=1.0,Key=Gamepad_RightY) ; invert look
 ```
 
-Actions: `Draw`, `Jump`, `Quit`. Axes: `MoveForward`, `MoveRight`, `Turn`, `LookUp`
+Actions: `Draw`, `Sneak`, `Jump`, `Journal`, `Quit`. Axes: `MoveForward`, `MoveRight`, `Turn`, `LookUp`
 (mouse), `TurnRate`, `LookUpRate` (sticks). Edit `DefaultInput.ini` for everyone, or
 the per-player copy Unreal writes under `game/Saved/Config/<Platform>/Input.ini`.
 Unusual devices (flight sticks, wheels, arcade sticks) can be mapped to gamepad
 inputs with Steam Input or a tool like Joystick Mapper.
+
+### 📓 The journal
+
+Progress is knowledge, not score. The lake holds the same 18 cutthroat every visit
+(a fixed seed places and sizes them), and the journal (**J**) follows each one
+through three stages, always in order:
+
+| Stage | How you earn it |
+|---|---|
+| Observed | Keep the fish near the middle of your view, in clear sight, for a second and a half |
+| Stalked | Watch it from within 8 m while it carries on undisturbed, for two seconds |
+| Landed | Hit it |
+
+Each stage records the moment: date and time, sun height, the fish's depth, your
+distance, and where in the lake it was ("under the log", "below the falls", "off
+the boardwalk", "in the deep middle"...). The journal is saved to
+`game/Saved/HangingLake/Journal.json` and carries over between sessions.
 
 ### 📱 Phones
 
@@ -89,19 +117,24 @@ point elsewhere). The first launch compiles shaders and can take a few minutes.
 | Falls inflow | OpenStreetMap, East Fork Dead Horse Creek |
 | The fallen log | Measured off the USGS NAIP aerial photo: from the north-east rim (39.601460 N, 107.191661 W) south-west to 39.601373 N, 107.191781 W, extended 3.5 m onto the travertine shelf so it meets the bank. Slim, bleached and floating flat, with the row of branch spikes and moss tufts seen in photos |
 | Falls, colours, forest | Matched by eye to photos: curtains over the north rim's cream and rust travertine, turquoise water over a pale bed, conifers on the slopes |
+| The fish | Cutthroat trout: the lake's own fish are an isolated population of native cutthroat. Numbers, sizes and behaviour are invented |
+| Refraction | Snell's law with water at n = 1.333, solved exactly per fish each frame (`HLSnellSolver`) |
 
 ![NAIP aerial with the OSM lake outline and boardwalk; the log is the pale diagonal](docs/media/naip-log-survey.png)
 
 Still simple: the falls are static ribbons (no motion or mist), trees are cones, rock
 and travertine are vertex colours rather than textures, and there are no aspens,
-grasses or reflections yet. The log's position and angle are surveyed; its shape is
+grasses or reflections yet. The water tints but does not bend light on screen, so the
+game moves each fish's visible body to its refracted position itself; the lake bed
+is not shifted the same way, so a fish can look a little higher above the bed than
+it is. The log's position and angle are surveyed; its shape is
 matched by eye.
 
 ## 📁 Layout
 
 | Folder | What |
 |---|---|
-| [`game/`](game) | The Unreal 5.8 C++ project. Gameplay in `Source/HangingLake/`: terrain and lake bed (`HLTerrainData`), water (`HLWaterSurface`), the bow and refraction (`HLBow`, `HLSnellSolver`), fish (`HLFish`), landmarks, lighting and spawn (`HLGameMode`) |
+| [`game/`](game) | The Unreal 5.8 C++ project. Gameplay in `Source/HangingLake/`: terrain and lake bed (`HLTerrainData`), water (`HLWaterSurface`), the bow and refraction (`HLBow`, `HLSnellSolver`), fish (`HLFish`), the journal (`HLJournal`), landmarks, lighting and spawn (`HLGameMode`). Engine-free tests in `game/Tests/` |
 | [`pipeline/`](pipeline) | Python that builds the terrain data from public sources. See [its README](pipeline/README.md) |
 | [`docs/`](docs) | The media above. The design spec is in [`pipeline/docs/`](pipeline/docs/superpowers/specs) |
 
@@ -114,16 +147,44 @@ Command-line flags for testing (they do nothing unless passed):
 | `-hlshot` | Screenshot at 45 s (after shaders finish) |
 | `-hlpitch=<deg> -hlyaw=<deg> [-hlpan=<deg/s>]` | Lock (or slowly pan) the view so captures repeat |
 | `-hlautoshoot [-hlshootat=<s>]` | Fire four aimed test shots at fish and log hits |
+| `-hlautoshoot -hlaimimage` | The same, but aim straight at the image of the nearest still fish within 4.5 m, the way a player would (tests "aim where it looks") |
+| `-hlnoimage` | Draw fish where they really are, not where refraction shows them |
+| `-hlbendarrow` | Arrows bend at the surface like light, so a shot at the fish's image lands (the default is a real, straight arrow) |
+| `-hljournal=<file>` | Use another journal file (a test can start from an empty one) |
+| `-hlquit=<s>` | Quit after that many seconds (for scripted runs) |
+| `-hlmaxdepth=<m>` | Rescale the authored lake bed to this maximum depth (default 2.2 m) without re-running the pipeline |
 | `-hlwalklog` | Start on the shelf and walk out along the log, logging height over the water |
 | `-hlrec=<s> -hlrecdur=<s> -hlrecfps=<n>` | Save frames for a GIF |
 | `-hltrace` | Log the camera every 5 s |
 | `-hlnoterrain -hlnowater -hlnofish -hlnomat` | Turn pieces off to isolate a problem |
 | `-hlev=<bias>` | Exposure bias (default -1) |
 
+## 🧪 Tests
+
+Two checks run without Unreal, so they are safe while the editor is busy with
+another project:
+
+```bash
+game/Tests/SnellSolver/run.sh        # the aiming maths: HLSnellSolver.cpp built against a tiny Core shim
+python3 game/Tests/check_compile.py  # every game .cpp through clang against the installed engine headers
+cd pipeline && .venv/bin/python -m pytest tests -q
+```
+
+`check_compile.py` reuses the compiler flags Unreal saved at the last real build and
+patches the line numbers in stale generated headers, so edits to existing classes
+check cleanly. A brand-new `UCLASS`/`USTRUCT` still needs a real build. CI runs the
+solver tests and the pipeline tests on every pull request.
+
+When Unreal is free, `game/Tests/play_test.sh` builds the game and plays three short
+self-shooting sessions (solver aim, aim at the image, aim at the image with a straight
+arrow), then prints hits, misses and journal lines from each log.
+
 ## 📜 Data credits
 
 - Elevation: U.S. Geological Survey, 3D Elevation Program (public domain).
 - Aerial imagery used to place the log: USDA NAIP via the USGS National Map (public domain).
+- Fish: published accounts of the lake describe its trout as an isolated population of
+  native cutthroat. The game's numbers, sizes and behaviour are invented.
 - Lake outline, trail, boardwalk and streams: © OpenStreetMap contributors, available
   under the [Open Database License](https://www.openstreetmap.org/copyright). The
   cached extracts are in `pipeline/data/cache/`.

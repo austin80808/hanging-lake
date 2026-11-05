@@ -26,6 +26,9 @@ public:
 	void StartDraw();
 	void ReleaseDraw();
 
+	/** Let the string down without shooting. */
+	void CancelDraw() { bDrawing = false; DrawAlpha = 0.0f; }
+
 	UFUNCTION(BlueprintPure, Category = "Hanging Lake|Bow")
 	float GetDrawAlpha() const { return DrawAlpha; }
 
@@ -36,8 +39,21 @@ public:
 	/** Where the aim ray enters the water, for the HUD's surface marker. */
 	bool GetAimWaterEntry(FVector& OutEntry, FVector& OutAimDir) const;
 
-	/** Exposed for the teaching overlay: the last shot's bent path. */
+	/** The last shot as the arrow actually flew (gravity arc and the bend), for
+	 *  the teaching overlay. */
 	const TArray<FVector>& GetLastShotPath() const { return LastShotPath; }
+
+	/** Index in GetLastShotPath() of the surface crossing, or INDEX_NONE. */
+	int32 GetLastShotEntryIndex() const { return LastShotEntryIndex; }
+
+	/**
+	 * False (the default, Austin's call 2026-11-04): real physics. The arrow keeps
+	 * its line through the surface, so the player has to aim below the fish's
+	 * refracted image, as a spearfisher does. True (-hlbendarrow): the arrow
+	 * refracts like light, so a shot at the image lands (gravity aside).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hanging Lake|Bow")
+	bool bArrowBendsLikeLight = false;
 
 	/** Fired when an arrow hits a fish. */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnFishHit, class AHLFish*);
@@ -79,8 +95,13 @@ protected:
 	FVector ArrowVel = FVector::ZeroVector;
 	bool bArrowUnderwater = false;
 	float ArrowTimer = 0.0f;
+	/** Unspent frame time: the flight runs in exact 1/120 s steps, so it matches
+	 *  the AutoShoot simulation step for step. */
+	float FlightAccumulator = 0.0f;
 
 	TArray<FVector> LastShotPath;
+	int32 LastShotEntryIndex = INDEX_NONE;
+	int32 StepsSinceSample = 0;
 
 	FVector GetEyeLocation() const;
 	FVector GetAimDirection() const;
@@ -88,4 +109,10 @@ protected:
 
 	/** One fixed step of flight; true when the shot has ended. */
 	bool StepArrow(float Dt);
+
+	/** Sweep the arrow from where it is to To. On a hit, ends the shot and returns true. */
+	bool SweepTo(const FVector& To);
+
+	/** The arrow is at the surface now: bend (or not), slow, splash, mark the kink. */
+	void EnterWater();
 };

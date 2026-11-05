@@ -5,6 +5,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "HLBow.h"
 #include "HLGameMode.h"
+#include "HLHUD.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -24,11 +25,16 @@ void AHLPlayerController::BeginPlay()
 	}
 
 	// Walking speed suited to a hiker on rock, not a sprint.
+	SetWalkSpeed(200.0f);
+}
+
+void AHLPlayerController::SetWalkSpeed(float Speed)
+{
 	if (ACharacter* Char = Cast<ACharacter>(GetPawn()))
 	{
 		if (UCharacterMovementComponent* Move = Char->GetCharacterMovement())
 		{
-			Move->MaxWalkSpeed = 200.0f;
+			Move->MaxWalkSpeed = Speed;
 		}
 	}
 }
@@ -46,6 +52,9 @@ void AHLPlayerController::SetupInputComponent()
 	InputComponent->BindAction(TEXT("Draw"), IE_Released, this, &AHLPlayerController::OnDrawReleased);
 	InputComponent->BindAction(TEXT("Quit"), IE_Pressed, this, &AHLPlayerController::OnQuit);
 	InputComponent->BindAction(TEXT("Jump"), IE_Pressed, this, &AHLPlayerController::OnJump);
+	InputComponent->BindAction(TEXT("Journal"), IE_Pressed, this, &AHLPlayerController::OnJournal);
+	InputComponent->BindAction(TEXT("Sneak"), IE_Pressed, this, &AHLPlayerController::OnSneakPressed);
+	InputComponent->BindAction(TEXT("Sneak"), IE_Released, this, &AHLPlayerController::OnSneakReleased);
 	InputComponent->BindAxis(TEXT("TurnRate"));
 	InputComponent->BindAxis(TEXT("LookUpRate"));
 
@@ -132,4 +141,24 @@ void AHLPlayerController::OnJump()
 void AHLPlayerController::OnQuit()
 {
 	UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
+}
+
+void AHLPlayerController::OnJournal()
+{
+	if (AHLHUD* H = Cast<AHLHUD>(GetHUD()))
+	{
+		H->ToggleJournal();
+	}
+}
+
+void AHLPlayerController::OnSneakPressed()
+{
+	// A creep: slow enough that a trout a few metres off holds its ground.
+	// (Fish bolt from anything faster than 110 cm/s nearby; see AHLFish::WatchForPlayer.)
+	SetWalkSpeed(70.0f);
+}
+
+void AHLPlayerController::OnSneakReleased()
+{
+	SetWalkSpeed(200.0f);
 }

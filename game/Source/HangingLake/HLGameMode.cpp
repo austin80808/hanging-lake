@@ -179,9 +179,35 @@ void AHLGameMode::StartPlay()
 			Terrain, Water);
 	}
 
+	BuildCoverPoints();
 	if (!FParse::Param(FCommandLine::Get(), TEXT("hlnofish")))
 	{
 		SpawnFish();
+	}
+
+	// --- journal ----------------------------------------------------------
+	// Saved/HangingLake/Journal.json, or -hljournal=<file> (a test can start clean).
+	FString JournalPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HangingLake"), TEXT("Journal.json"));
+	JournalPath = FPaths::ConvertRelativePathToFull(JournalPath);
+	FString JournalArg;
+	if (FParse::Value(FCommandLine::Get(), TEXT("hljournal="), JournalArg))
+	{
+		// Relative to where the game was launched from, not the engine's binaries.
+		JournalPath = FPaths::ConvertRelativePathToFull(FPaths::LaunchDir(), JournalArg);
+	}
+	Journal.SetPath(JournalPath);
+	Journal.Load();
+	if (Bow)
+	{
+		Bow->OnFishHit.AddUObject(this, &AHLGameMode::OnFishLanded);
+	}
+	{
+		FTimerHandle JournalTimer;
+		TWeakObjectPtr<AHLGameMode> WeakThis(this);
+		World->GetTimerManager().SetTimer(JournalTimer, [WeakThis]()
+		{
+			if (WeakThis.IsValid()) { WeakThis->UpdateJournal(0.25f); }
+		}, 0.25f, true, 1.0f);
 	}
 
 	// --- diagnostics ------------------------------------------------------
@@ -333,6 +359,19 @@ void AHLGameMode::StartPlay()
 				FScreenshotRequest::RequestScreenshot(TEXT("hlbowl"), true, false);
 			}
 		}, 45.0f, false);
+	}
+
+	// Test runs: quit by themselves after <s> seconds (-hlquit=<s>), so a script
+	// can play a session and read the log (game/Tests/play_test.sh).
+	float QuitAfter = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("hlquit="), QuitAfter) && QuitAfter > 0.0f)
+	{
+		FTimerHandle QuitTimer;
+		World->GetTimerManager().SetTimer(QuitTimer, []()
+		{
+			UE_LOG(LogTemp, Warning, TEXT("HLQUIT time is up"));
+			FPlatformMisc::RequestExit(false, TEXT("hlquit"));
+		}, QuitAfter, false);
 	}
 }
 
@@ -707,31 +746,44 @@ namespace
 	// Mirrors AHLBow::Tick's flight model at full draw. Returns the closest the
 	// path comes to Target before it hits the ground, and the time it gets there.
 	float SimulateMiss(const UHLTerrainData* Terrain, const FVector& Eye, const FVector& Dir,
-		float WaterZ, const FVector& Target, float& OutTime)
+		float WaterZ, const FVector& Target, bool bBendsLikeLight, float& OutTime)
 	{
+		// Step for step what AHLBow::StepArrow does at full draw: 1/120 s steps,
+		// split at the surface so the bend happens exactly where the arrow enters.
 		FVector Pos = Eye + Dir * 60.0f; // the bow starts the arrow 60 cm out
 		FVector Vel = Dir * 4200.0f;
-		bool bUnder = false;
+		bool bUnder = Pos.Z < WaterZ;
 		float Best = TNumericLimits<float>::Max();
 		OutTime = 0.0f;
 		const float Dt = 1.0f / 120.0f;
 		for (float T = 0.0f; T < 4.0f; T += Dt)
 		{
-			Vel.Z -= 980.0f * Dt;
-			if (Pos.Z < WaterZ && !bUnder)
+			auto Consider = [&](const FVector& A, const FVector& B)
 			{
-				bUnder = true;
-				bool bTIR = false;
-				Vel = FHLSnellSolver::Refract(Vel.GetSafeNormal(), FVector::UpVector, 1.0f,
-					FHLSnellSolver::WaterIOR, bTIR) * Vel.Size() * 0.9f;
-			}
+				const float D = FMath::PointDistToSegment(Target, A, B);
+				if (D < Best) { Best = D; OutTime = T; }
+			};
+			Vel.Z -= 980.0f * Dt;
 			if (bUnder)
 			{
 				Vel *= FMath::Pow(0.12f, Dt);
 			}
-			const FVector Next = Pos + Vel * Dt;
-			const float D = FMath::PointDistToSegment(Target, Pos, Next);
-			if (D < Best) { Best = D; OutTime = T; }
+			FVector Next = Pos + Vel * Dt;
+			if (!bUnder && Next.Z < WaterZ)
+			{
+				const float U = FMath::Clamp((Pos.Z - WaterZ) / (Pos.Z - Next.Z), 0.0f, 1.0f);
+				const FVector Cross = Pos + (Next - Pos) * U;
+				Consider(Pos, Cross);
+				Pos = Cross;
+				bUnder = true;
+				bool bTIR = false;
+				Vel = bBendsLikeLight
+					? FHLSnellSolver::Refract(Vel.GetSafeNormal(), FVector::UpVector, 1.0f,
+						FHLSnellSolver::WaterIOR, bTIR) * Vel.Size() * 0.9f
+					: Vel * 0.9f;
+				Next = Pos + Vel * (Dt * (1.0f - U));
+			}
+			Consider(Pos, Next);
 			Pos = Next;
 			if (Pos.Z < Terrain->ElevationAt(Pos.X, Pos.Y)) { break; } // blocked by rock or bed
 		}
@@ -785,7 +837,7 @@ void AHLGameMode::AutoShoot()
 				{
 					float Time = 0.0f;
 					const float M = SimulateMiss(GM->Terrain, Eye, FRotator(P, Yaw, 0.0f).Vector(),
-						GM->Water->GetWaterZ(), Aim, Time);
+						GM->Water->GetWaterZ(), Aim, GM->Bow->bArrowBendsLikeLight, Time);
 					if (M < PassBest) { PassBest = M; PassPitch = P; PassTime = Time; }
 				}
 				Pitch = PassPitch; Miss = PassBest;
@@ -797,6 +849,42 @@ void AHLGameMode::AutoShoot()
 			// time to leave the aim point.
 			const float Score = Miss + 0.01f * FVector::Dist(F->GetActorLocation(), Eye);
 			if (Miss < 5.0f && Score < BestScore) { BestScore = Score; BestMiss = Miss; BestPitch = Pitch; BestYaw = Yaw; BestFish = F; }
+		}
+		if (FParse::Param(FCommandLine::Get(), TEXT("hlaimimage")))
+		{
+			// Test the README's promise instead of the solver: point the reticle at the
+			// nearest fish's image, as a player would, and let go. Only still fish
+			// (holding or resting) within 4.5 m qualify: past that, gravity alone
+			// drops a full-draw arrow more than a trout is tall, and a cruising fish
+			// moves out of the way during the flight. With the arrow bending like
+			// light (-hlbendarrow) these shots land; with a real, straight arrow (the
+			// default) they go high.
+			BestFish = nullptr;
+			float BestDist = 450.0f;
+			for (const auto& Pair : Before)
+			{
+				AHLFish* F = Pair.Key.Get();
+				if (!F || F->bLanded
+					|| (F->GetState() != EHLFishState::Hold && F->GetState() != EHLFishState::Rest))
+				{
+					continue;
+				}
+				const float D = FVector::Dist(F->GetImageLocation(), Eye);
+				if (D < BestDist) { BestDist = D; BestFish = F; }
+			}
+			if (!BestFish)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("HLSHOOT skipped: no still fish within 4.5 m to aim at"));
+				GM->Bow->CancelDraw();
+				return;
+			}
+			if (BestFish)
+			{
+				const FRotator R = (BestFish->GetImageLocation() - Eye).Rotation();
+				BestPitch = R.Pitch; BestYaw = R.Yaw; BestMiss = -1.0f;
+				UE_LOG(LogTemp, Warning, TEXT("HLSHOOT aiming at the image of %s: %.0f cm above the fish, %.0f cm away"),
+					*BestFish->GetName(), BestFish->GetImageLocation().Z - BestFish->GetActorLocation().Z, BestDist);
+			}
 		}
 		if (!BestFish)
 		{
@@ -836,7 +924,7 @@ void AHLGameMode::FixLighting(UWorld* World)
 			// Rotator takes (roll, pitch, yaw): the sun ended up below the horizon
 			// and the sky rendered as night. Aim it here, warm and fairly low.
 			C->SetMobility(EComponentMobility::Movable);
-			It->SetActorRotation(FRotator(-38.0f, 148.0f, 0.0f));
+			It->SetActorRotation(FRotator(-SunElevationDeg, 148.0f, 0.0f));
 			C->SetAtmosphereSunLight(true);
 			C->SetIntensity(10.0f);
 		}
@@ -891,13 +979,13 @@ int32 AHLGameMode::CountAlive() const
 	return N;
 }
 
-FVector AHLGameMode::FindDeepWater(float MinDepthCm) const
+FVector AHLGameMode::FindDeepWater(float MinDepthCm, FRandomStream& Stream) const
 {
 	const FVector2D Extent = Terrain->GetExtentCm();
 	for (int32 Attempt = 0; Attempt < 400; ++Attempt)
 	{
-		const float X = FMath::FRandRange(0.0f, Extent.X);
-		const float Y = FMath::FRandRange(0.0f, Extent.Y);
+		const float X = Stream.FRandRange(0.0f, Extent.X);
+		const float Y = Stream.FRandRange(0.0f, Extent.Y);
 		const float Depth = Terrain->DepthAt(X, Y);
 		if (Depth >= MinDepthCm)
 		{
@@ -918,13 +1006,17 @@ void AHLGameMode::SpawnFish()
 		return;
 	}
 
+	// The same fish every visit: homes, sizes and markings come from a fixed seed.
+	FRandomStream Pop(PopulationSeed);
 	for (int32 I = 0; I < FishCount; ++I)
 	{
 		// Hold stations prefer shallower shelves (where they can be seen), but a
 		// third of the population sits deep, which is what makes a landed deep
 		// fish feel earned.
 		const float MinDepth = (I % 3 == 0) ? 150.0f : 40.0f;
-		const FVector Home = FindDeepWater(MinDepth);
+		const FVector Home = FindDeepWater(MinDepth, Pop);
+		const float Length = Pop.FRandRange(22.0f, 48.0f);
+		const float Shade = Pop.FRandRange(0.8f, 1.2f);
 
 		FActorSpawnParameters Params;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -936,9 +1028,216 @@ void AHLGameMode::SpawnFish()
 			continue;
 		}
 
-		const float Length = FMath::FRandRange(22.0f, 48.0f);
+		F->FishId = I + 1;
+		// Hanging Lake's trout are cutthroat, an isolated native population. From
+		// the boardwalk they read as dark olive backs over the pale travertine.
+		F->SpeciesId = TEXT("cutthroat");
+		F->SetCoverPoints(CoverPoints);
 		F->Init(Terrain, Home, Length);
-		F->SpeciesId = TEXT("brook");
+		F->SetColour(FLinearColor(0.13f, 0.12f, 0.06f) * Shade);
 		Fish.Add(F);
 	}
+}
+
+void AHLGameMode::BuildCoverPoints()
+{
+	CoverPoints.Reset();
+	if (!Terrain)
+	{
+		return;
+	}
+	const float WaterZ = Terrain->GetWaterZ();
+
+	// The log's shade, along the floating part of the trunk.
+	for (int32 I = 0; I < LogPath.Num(); I += 2)
+	{
+		if (Terrain->DepthAt(LogPath[I].X, LogPath[I].Y) > 40.0f)
+		{
+			CoverPoints.Add(FVector(LogPath[I].X, LogPath[I].Y, WaterZ));
+		}
+	}
+
+	// The churned, deeper water below the falls.
+	for (const float Radius : {300.0f, 600.0f, 900.0f})
+	{
+		for (int32 A = 0; A < 16; ++A)
+		{
+			const float Angle = 2.0f * PI * A / 16.0f;
+			const FVector P(HLLandmarks::Falls.X + FMath::Cos(Angle) * Radius,
+				HLLandmarks::Falls.Y + FMath::Sin(Angle) * Radius, WaterZ);
+			if (Terrain->DepthAt(P.X, P.Y) > 60.0f)
+			{
+				CoverPoints.Add(P);
+			}
+		}
+	}
+	UE_LOG(LogTemp, Display, TEXT("HL: %d cover points (log and falls)"), CoverPoints.Num());
+}
+
+FString AHLGameMode::PlaceName(const FVector& Where) const
+{
+	const FVector Flat(Where.X, Where.Y, 0.0f);
+	auto DistToLine = [&Flat](const TArray<FVector>& Pts)
+	{
+		float Best = TNumericLimits<float>::Max();
+		for (int32 I = 0; I + 1 < Pts.Num(); ++I)
+		{
+			Best = FMath::Min(Best, FMath::PointDistToSegment(
+				Flat, FVector(Pts[I].X, Pts[I].Y, 0.0f), FVector(Pts[I + 1].X, Pts[I + 1].Y, 0.0f)));
+		}
+		return Best;
+	};
+
+	if (DistToLine(LogPath) < 300.0f)
+	{
+		return TEXT("under the log");
+	}
+	if (FVector::Dist2D(Flat, FVector(HLLandmarks::Falls, 0.0f)) < 900.0f)
+	{
+		return TEXT("below the falls");
+	}
+	TArray<FVector> Walk;
+	for (const FVector2D& P : HLLandmarks::Boardwalk)
+	{
+		Walk.Add(FVector(P, 0.0f));
+	}
+	if (DistToLine(Walk) < 400.0f)
+	{
+		return TEXT("off the boardwalk");
+	}
+
+	const float Depth = Terrain ? Terrain->DepthAt(Where.X, Where.Y) : 0.0f;
+	if (Depth > 160.0f)
+	{
+		return TEXT("in the deep middle");
+	}
+	if (Depth < 70.0f)
+	{
+		return TEXT("on the shallow shelf");
+	}
+	return TEXT("in open water");
+}
+
+void AHLGameMode::UpdateJournal(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC || !Terrain)
+	{
+		return;
+	}
+
+	FVector Eye;
+	FRotator View;
+	PC->GetPlayerViewPoint(Eye, View);
+	const FVector Forward = View.Vector();
+	const APawn* Pawn = PC->GetPawn();
+	const FVector Feet = Pawn ? Pawn->GetActorLocation() : Eye;
+
+	// "In view" means near the middle of the screen, in range and not behind rock
+	// or the log: what a person would call watching it.
+	const float ViewCos = FMath::Cos(FMath::DegreesToRadians(18.0f));
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(HLJournalSight), false, Pawn);
+
+	for (AHLFish* F : Fish)
+	{
+		if (!F || F->bLanded)
+		{
+			continue;
+		}
+		const int32 Id = F->FishId;
+		const bool bCalm = F->GetState() != EHLFishState::Startle;
+		if (!bCalm)
+		{
+			CloseSeconds.Remove(Id); // spooked: the stalk starts over
+		}
+
+		// Both stages need an unbroken stretch: look away, lose sight of it or let
+		// it spook, and the count starts again.
+		const FVector Img = F->GetImageLocation();
+		const FVector To = Img - Eye;
+		const float Dist = To.Size();
+		bool bInView = Dist <= 3500.0f && Dist >= 1.0f && FVector::DotProduct(To / Dist, Forward) >= ViewCos;
+		if (bInView)
+		{
+			FHitResult Hit;
+			bInView = !World->LineTraceSingleByChannel(Hit, Eye, Img, ECC_Visibility, Params) || Hit.GetActor() == F;
+		}
+		if (!bInView)
+		{
+			SeenSeconds.Remove(Id);
+			CloseSeconds.Remove(Id);
+			continue;
+		}
+
+		float& Seen = SeenSeconds.FindOrAdd(Id);
+		Seen += DeltaSeconds;
+		if (Seen >= 1.5f && Journal.GetStage(Id) < EHLJournalStage::Observed)
+		{
+			RecordJournal(F, EHLJournalStage::Observed, Dist);
+		}
+
+		// Stalked: watched from within bow range while it carried on undisturbed.
+		const float Flat = FVector::Dist2D(Feet, F->GetActorLocation());
+		if (!bCalm || Flat >= StalkRangeCm)
+		{
+			CloseSeconds.Remove(Id);
+			continue;
+		}
+		float& Close = CloseSeconds.FindOrAdd(Id);
+		Close += DeltaSeconds;
+		if (Close >= 2.0f && Journal.GetStage(Id) < EHLJournalStage::Stalked)
+		{
+			RecordJournal(F, EHLJournalStage::Stalked, Flat);
+		}
+	}
+}
+
+void AHLGameMode::RecordJournal(AHLFish* F, EHLJournalStage Stage, float DistanceCm)
+{
+	if (!F)
+	{
+		return;
+	}
+	FHLJournalMoment Moment;
+	Moment.When = FDateTime::UtcNow(); // stored as ISO 8601 with a Z, so it must be UTC
+	Moment.SunElevationDeg = SunElevationDeg;
+	Moment.DepthCm = F->GetDepthCm();
+	Moment.DistanceCm = DistanceCm;
+	Moment.Place = PlaceName(F->GetActorLocation());
+
+	const bool bNew = Journal.Record(F->FishId, F->SpeciesId, F->GetBodyLengthCm(), Stage, Moment);
+	if (!bNew && Stage != EHLJournalStage::Landed)
+	{
+		return;
+	}
+	Journal.Save();
+
+	const FHLJournalEntry* E = Journal.Find(F->FishId);
+	JournalNote = (Stage == EHLJournalStage::Landed && E && E->TimesLanded > 1)
+		? FString::Printf(TEXT("No. %d landed again (%d times)"), F->FishId, E->TimesLanded)
+		: FString::Printf(TEXT("No. %d, %.0f cm %s: %s %s, %.1f m down"),
+			F->FishId, F->GetBodyLengthCm(), *F->SpeciesId.ToString(),
+			*FHLJournal::StageName(Stage), *Moment.Place, Moment.DepthCm / 100.0f);
+	JournalNoteTime = GetWorld()->GetTimeSeconds();
+	UE_LOG(LogTemp, Warning, TEXT("HLJOURNAL %s"), *JournalNote);
+}
+
+void AHLGameMode::OnFishLanded(AHLFish* F)
+{
+	const APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	const float Dist = (F && Pawn) ? FVector::Dist(Pawn->GetActorLocation(), F->GetActorLocation()) : 0.0f;
+	RecordJournal(F, EHLJournalStage::Landed, Dist);
+}
+
+bool AHLGameMode::GetJournalNote(FString& OutNote, float& OutAgeSeconds) const
+{
+	if (JournalNote.IsEmpty() || !GetWorld())
+	{
+		return false;
+	}
+	OutNote = JournalNote;
+	OutAgeSeconds = GetWorld()->GetTimeSeconds() - JournalNoteTime;
+	return true;
 }

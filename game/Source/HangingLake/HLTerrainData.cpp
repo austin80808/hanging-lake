@@ -70,6 +70,23 @@ bool UHLTerrainData::LoadFromDirectory(const FString& DataDir)
 	if (ReadFloat32Array(DepthPath, RawDepth, DepthCount) && DepthCount == HeightCount)
 	{
 		Depths = MoveTemp(RawDepth);
+
+		// The bed is authored, not surveyed (3DEP has no bathymetry here), so its
+		// depth is a tunable: -hlmaxdepth=<m> rescales the whole basin at load.
+		float WantMaxM = 0.0f;
+		double BuiltMaxM = 0.0;
+		const TSharedPtr<FJsonObject>* LakeObj = nullptr;
+		if (FParse::Value(FCommandLine::Get(), TEXT("hlmaxdepth="), WantMaxM) && WantMaxM > 0.0f
+			&& Bowl->TryGetObjectField(TEXT("lake"), LakeObj) && LakeObj && LakeObj->IsValid()
+			&& (*LakeObj)->TryGetNumberField(TEXT("max_depth_m"), BuiltMaxM) && BuiltMaxM > 0.0)
+		{
+			const float Scale = WantMaxM / static_cast<float>(BuiltMaxM);
+			for (float& D : Depths)
+			{
+				if (D > 0.0f) { D *= Scale; }
+			}
+			UE_LOG(LogTemp, Display, TEXT("HL: lake bed rescaled from %.2f m to %.2f m deep"), BuiltMaxM, WantMaxM);
+		}
 	}
 
 	const TSharedPtr<FJsonObject>* ExtentObj = nullptr;

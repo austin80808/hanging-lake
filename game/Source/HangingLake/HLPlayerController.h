@@ -27,6 +27,10 @@ protected:
 	void OnJump();
 	void OnTurn(float Value);
 	void OnLookUp(float Value);
+	void OnJournal();
+	void OnSneakPressed();
+	void OnSneakReleased();
+	void SetWalkSpeed(float Speed);
 
 	UPROPERTY()
 	AHLBow* Bow = nullptr;

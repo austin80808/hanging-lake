@@ -3,7 +3,8 @@
 **Date:** 2026-11-04
 **Engine:** Unreal Engine 5.8 (Apple Silicon, installed at `/Users/Shared/Epic Games/UE_5.8`)
 **Repo:** `~/dev/hanging-lake-ue` (data half) + a UE project in `~/Documents/Unreal Projects/`
-**Status:** Spec. No Unreal work begun — the Red Rocks project has priority on the editor.
+**Status:** Built through phase 6 (journal), with phase 7 dressing begun. See
+"Decisions since" at the end for where the build departs from this text.
 
 ---
 
@@ -244,3 +245,40 @@ and rethink before building content on it.
   session launched UE. The data package is engine-agnostic and can sit until the
   editor is free.
 - No changes to any Lowtemp system. This is a personal project.
+
+---
+
+## 9. Decisions since (2026-11-04)
+
+- **Refraction, made consistent.** Section 2 mixed two models: an arrow that follows
+  the light's bent path, and "aiming at the image undershoots". Both cannot hold: if
+  the arrow bends like light, a shot at the image lands. The game now does it this
+  way, and says so:
+  - The renderer's water is a flat tint and does not refract, so each fish draws its
+    visible body at the refracted image position (`FHLSnellSolver::ApparentPosition`:
+    on the eye's line of sight, straight above the real fish). Collision and shadow
+    stay with the real fish.
+  - **The arrow is a real one by default** (Austin, 2026-11-04: "Straight, real
+    physics"). It keeps its line through the surface, so the player aims under the
+    image: the spearfishing curve this section originally described, growing with
+    flatter angles. `-hlbendarrow` (`AHLBow::bArrowBendsLikeLight`) switches to an
+    arrow that refracts like light, for which "aim where it looks" is true.
+  - The first catch marks "it looked here" and "it was here" and draws the arrow's
+    recorded flight with the kink at the surface.
+- **Solver bugs fixed.** `ApparentPosition` returned the real position (it traced
+  the straight line, so there was no bend), and `SolveAim` compared a refracted
+  direction with itself. Both now solve the Fermat crossing by bisection; 634 checks
+  in `game/Tests/SnellSolver` cover Snell's law, reversibility, total internal
+  reflection, apparent depth (depth / n straight down) and "a light-like shot at the
+  image reaches the fish".
+- **Species.** Hanging Lake's fish are an isolated population of native cutthroat,
+  so the lake holds cutthroat only.
+- **Journal per fish, not per species.** With one species, three journal entries
+  would be the whole game. The population is fixed (seed 7177) so the same 18
+  individuals live in the lake every visit, and the journal follows each one
+  through Observed, Stalked and Landed, saved as JSON in `Saved/HangingLake/`.
+  Landed fish return next session; the journal counts repeat catches.
+- **Fish behaviour.** Rest is now used (the log's shade, the water below the falls);
+  startle and rest end when their timers run out (before, a startled fish never
+  calmed down); fish bolt from a hurried walker within a few metres but tolerate a
+  creep (Shift), and each scare raises a wariness that fades over minutes.
